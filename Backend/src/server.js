@@ -94,6 +94,11 @@ async function handleRequest(req, res) {
     return;
   }
 
+  if (req.method === 'DELETE' && pathname === '/api/user-data') {
+    await handleDeleteUserData(req, res);
+    return;
+  }
+
   if (req.method === 'GET' && pathname === '/api/quota') {
     await handleGetQuota(req, res);
     return;
@@ -107,6 +112,45 @@ async function handleRequest(req, res) {
   sendJSON(res, 404, {
     error: 'not_found',
     message: '接口不存在'
+  });
+}
+
+async function handleDeleteUserData(req, res) {
+  if (!enforceRateLimit(req, res, rateLimits.quota)) {
+    return;
+  }
+
+  const installId = getHeader(req, 'x-install-id')?.trim();
+  if (!installId || installId.length > 120) {
+    sendJSON(res, 400, {
+      error: 'missing_install_id',
+      message: '缺少有效安装标识'
+    });
+    return;
+  }
+
+  let deletedUsageRows = 0;
+  if (database.isEnabled) {
+    const result = await database.deleteInstallData({ installId });
+    deletedUsageRows = result.deletedUsageRows;
+  } else {
+    const usage = await readUsage();
+    for (const day of Object.keys(usage)) {
+      if (usage[day]?.[installId]) {
+        delete usage[day][installId];
+        deletedUsageRows += 1;
+      }
+      if (Object.keys(usage[day] ?? {}).length === 0) {
+        delete usage[day];
+      }
+    }
+    await writeUsage(usage);
+  }
+
+  sendJSON(res, 200, {
+    ok: true,
+    deletedUsageRows,
+    message: '当前安装标识对应的额度记录已删除'
   });
 }
 
@@ -834,21 +878,33 @@ function privacyPolicyHTML() {
     title: '隐私政策',
     updatedAt: '2026-07-18',
     body: `
-    <p>二游活动小灵通用于整理游戏活动、兑换码和提醒。我们尽量只处理提供功能所必需的数据，不会出售用户数据，也不会用于跨 App 或跨网站追踪。</p>
+    <p>二游活动小灵通用于整理游戏活动和提醒。我们遵循最小必要原则，不出售用户数据，也不进行跨 App 或跨网站追踪。</p>
+
+    <h2>运营者与联系</h2>
+    <p>本服务由二游活动小灵通开发者运营。正式发布前将在此补充运营者真实名称、联系邮箱和注册地址。用户可通过公开联系方式提出查阅、更正、删除、撤回同意或投诉请求。</p>
 
     <h2>我们会处理的数据</h2>
     <ul>
       <li>安装标识：App 会生成一个随机安装标识，用于后端计算每日 AI 提取额度和基础限流。</li>
-      <li>公告内容：当你使用 AI 提取时，游戏名、公告链接和公告正文会发送到后端，用于提取活动并做缓存。</li>
+      <li>公告内容：仅当你主动使用 AI 提取时，游戏名、公告链接和公告正文会发送到后端，用于整理活动。共享结果缓存不保存安装标识与结果之间的映射。</li>
       <li>购买凭证：开通会员后，App 会把 App Store 交易凭证发送给后端，只用于验证会员额度。</li>
       <li>本地内容：你创建的游戏、活动、通知设置和小组件数据主要保存在设备本地；如果系统启用 iCloud，同步由 Apple iCloud 处理。</li>
     </ul>
 
-    <h2>第三方服务</h2>
-    <p>AI 提取功能会通过我们的后端调用 DeepSeek。App 内购买由 Apple App Store 处理，付款信息不经过我们的服务器。</p>
+    <h2>第三方服务与 AI 公示</h2>
+    <p>AI 提取功能通过我们的后端调用 DeepSeek；正式发布前将在 App 和本页补充实际模型名称及备案号。Apple 提供 App 内购买、iCloud 和通知能力；活动数据接口用于获取公开活动时间。付款信息不经过我们的服务器。</p>
 
     <h2>数据保留</h2>
-    <p>后端会保留每日额度记录和公告提取缓存，用于控制成本、加快重复公告处理和排查服务问题。你可以停止使用 AI 提取功能，以避免继续向后端发送公告内容。</p>
+    <p>后端仅按提供服务及安全审计所需的最短期限保留安装标识对应的额度记录。提取缓存保存公告内容哈希、链接和结构化结果，不保存原始公告正文。用户可在 App 的“管理我的数据”中删除额度记录并重置安装标识。</p>
+
+    <h2>存储地域与跨境</h2>
+    <p>当前测试环境可能使用境外云服务。正式面向中国大陆运营前，将迁移至已备案的数据基础设施，或依法履行适用的数据跨境义务。</p>
+
+    <h2>你的权利</h2>
+    <p>你可在 App 内清除本地数据、删除当前安装标识对应的服务器记录、撤回隐私同意。撤回后，在再次同意前 App 不会启动联网服务。</p>
+
+    <h2>未成年人保护</h2>
+    <p>本 App 不以未成年人为主要服务对象。未成年人应在监护人指导下使用 AI 功能和购买服务。</p>
 
     <h2>联系我们</h2>
     <p>如需隐私相关支持，请通过 App Store 产品页提供的开发者联系方式联系我们。</p>`
@@ -865,7 +921,7 @@ function termsOfServiceHTML() {
     <h2>会员与购买</h2>
     <ul>
       <li>月度会员为自动续订订阅，价格以 App Store 购买页显示为准。</li>
-      <li>永久会员为一次性购买项目，购买后可长期使用当前会员权益。</li>
+      <li>一休尼会员为一次性购买项目，购买后可长期使用当前会员权益。</li>
       <li>购买、续订、取消和退款由 Apple App Store 处理。你可以在系统账户的订阅管理中取消月度会员。</li>
       <li>月度会员会自动续订，除非在当前周期结束前至少 24 小时取消。</li>
     </ul>

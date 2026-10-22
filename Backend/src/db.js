@@ -7,7 +7,8 @@ export function createDatabase({ connectionString, ssl } = {}) {
     return {
       isEnabled: false,
       async init() {},
-      async health() { return { ok: false, configured: false }; }
+      async health() { return { ok: false, configured: false }; },
+      async deleteInstallData() { return { deletedUsageRows: 0 }; }
     };
   }
 
@@ -193,6 +194,17 @@ export function createDatabase({ connectionString, ssl } = {}) {
           JSON.stringify(events)
         ]
       );
+    },
+
+    async deleteInstallData({ installId }) {
+      const result = await pool.query(
+        `
+          DELETE FROM daily_ai_usage
+          WHERE install_id = $1
+        `,
+        [installId]
+      );
+      return { deletedUsageRows: result.rowCount ?? 0 };
     }
   };
 }
