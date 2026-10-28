@@ -1,0 +1,13 @@
+# macOS
+.DS_Store
+
+# Xcode
+Object1/build/
+DerivedData/
+xcuserdata/
+
+# Node
+node_modules/
+
+# Local scratch files
+Object1/Untitled.swift
