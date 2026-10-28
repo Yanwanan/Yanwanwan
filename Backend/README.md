@@ -1,12 +1,13 @@
 # 提取 Backend
 
-这个后端只做一件事：把 DeepSeek API key 留在服务器环境变量里，App 只请求自己的后端接口。
+这个后端做两件事：把 DeepSeek API key 留在服务器环境变量里；代理并缓存米哈游活动日历。App 只请求自己的后端接口。
 
 正式发布时建议部署到 Railway，并绑定 Railway Postgres。后端会使用 Postgres 保存：
 
 - 每日提取次数
 - 公告 URL + 正文 hash 的提取缓存
 - DeepSeek 返回的结构化活动
+- 米哈游活动日历（每个游戏 + 语言最近一次成功的数据）
 
 命中缓存时不会调用 DeepSeek，但仍会消耗 1 次每日提取次数。
 
@@ -76,6 +77,8 @@ TRUST_PROXY_HEADERS=true
 APP_BUNDLE_ID=ailesson.path.Object1
 APP_STORE_ROOT_CERT_PATH=./certs/AppleRootCA-G3.pem
 ALLOW_UNVERIFIED_STOREKIT_JWS=false
+CALENDAR_UPSTREAM_BASE_URL=https://api.ennead.cc
+CALENDAR_CACHE_TTL_SECONDS=600
 ```
 
 Railway 会自动提供 `PORT`，不需要手动设置。部署成功后打开 `/health`，确认：
@@ -106,6 +109,17 @@ curl -X POST http://127.0.0.1:8787/api/extract-events \
   -H 'X-App-Store-Transaction: 这里填 App 传来的 StoreKit 交易 JWS' \
   -d '{"gameName":"测试游戏","articleURL":"https://example.com/notice","text":"公告正文"}'
 ```
+
+## 活动日历代理
+
+`GET /api/calendar/{genshin|starrail|zenless}?lang=zh-cn`
+
+- 原样返回上游 `/mihoyo/{game}/calendar` 的 JSON，App 解码逻辑不变。
+- 缓存 10 分钟内直接返回（`CALENDAR_CACHE_TTL_SECONDS`），过期后再请求上游。
+- 上游失败或返回格式不对时，返回最近一次成功的数据，不覆盖缓存；从未成功过则返回 502。
+- 响应头 `X-Calendar-Cache` 为 `hit` / `miss` / `stale`，`X-Calendar-Fetched-At` 为数据抓取时间。
+- 缓存存在内存和 Postgres 的 `calendar_cache` 表里，重启后仍可用；未配置数据库时只用内存缓存。
+- 以后换数据源只需改 `CALENDAR_UPSTREAM_BASE_URL` 或 `src/calendar-proxy.js`，不用发 App 新版。
 
 ## 查询次数限制
 

@@ -5,6 +5,11 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createDatabase } from './db.js';
 import { normalizeExtractedEvents } from './event-filter.js';
+import {
+  SUPPORTED_CALENDAR_GAMES,
+  createCalendarProxy,
+  normalizeCalendarLang
+} from './calendar-proxy.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..');
@@ -44,11 +49,24 @@ const rateLimits = {
     limit: parsePositiveInteger(process.env.EXTRACT_RATE_LIMIT_PER_HOUR, 30),
     windowMs: 60 * 60 * 1000,
     message: '提取请求过于频繁，请稍后再试'
+  },
+  calendar: {
+    name: 'calendar',
+    limit: parsePositiveInteger(process.env.CALENDAR_RATE_LIMIT_PER_MINUTE, 120),
+    windowMs: 60 * 1000,
+    message: '刷新过于频繁，请稍后再试'
   }
 };
 const rateLimitBuckets = new Map();
 
 await database.init();
+
+const calendarProxy = createCalendarProxy({
+  upstreamBaseURL: process.env.CALENDAR_UPSTREAM_BASE_URL ?? 'https://api.ennead.cc',
+  freshMs: parsePositiveInteger(process.env.CALENDAR_CACHE_TTL_SECONDS, 600) * 1000,
+  timeoutMs: parsePositiveInteger(process.env.CALENDAR_UPSTREAM_TIMEOUT_MS, 10000),
+  store: database
+});
 
 const server = createServer((req, res) => {
   handleRequest(req, res).catch((error) => {
@@ -109,10 +127,53 @@ async function handleRequest(req, res) {
     return;
   }
 
+  const calendarMatch = req.method === 'GET' && pathname.match(/^\/api\/calendar\/([a-z]+)$/);
+  if (calendarMatch) {
+    await handleGetCalendar(req, res, calendarMatch[1]);
+    return;
+  }
+
   sendJSON(res, 404, {
     error: 'not_found',
     message: '接口不存在'
   });
+}
+
+async function handleGetCalendar(req, res, game) {
+  if (!enforceRateLimit(req, res, rateLimits.calendar)) {
+    return;
+  }
+
+  const lang = normalizeCalendarLang(getSearchParam(req.url, 'lang'));
+  if (!SUPPORTED_CALENDAR_GAMES.has(game) || !lang) {
+    sendJSON(res, 404, {
+      error: 'not_found',
+      message: '暂不支持该游戏'
+    });
+    return;
+  }
+
+  const result = await calendarProxy.get({ game, lang });
+
+  if (result.status === 'not_found') {
+    sendJSON(res, 404, {
+      error: 'not_found',
+      message: '暂不支持该游戏'
+    });
+    return;
+  }
+
+  if (result.status === 'unavailable') {
+    sendJSON(res, 502, {
+      error: 'calendar_unavailable',
+      message: '活动数据源暂时不可用，请稍后再试'
+    });
+    return;
+  }
+
+  res.setHeader('X-Calendar-Cache', result.status);
+  res.setHeader('X-Calendar-Fetched-At', new Date(result.fetchedAt).toISOString());
+  sendJSON(res, 200, result.payload);
 }
 
 async function handleDeleteUserData(req, res) {
@@ -676,6 +737,14 @@ function getPathname(rawUrl) {
     return new URL(rawUrl, 'http://localhost').pathname;
   } catch {
     return rawUrl;
+  }
+}
+
+function getSearchParam(rawUrl, name) {
+  try {
+    return new URL(rawUrl, 'http://localhost').searchParams.get(name);
+  } catch {
+    return null;
   }
 }
 

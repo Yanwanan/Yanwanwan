@@ -8,7 +8,9 @@ export function createDatabase({ connectionString, ssl } = {}) {
       isEnabled: false,
       async init() {},
       async health() { return { ok: false, configured: false }; },
-      async deleteInstallData() { return { deletedUsageRows: 0 }; }
+      async deleteInstallData() { return { deletedUsageRows: 0 }; },
+      async getCalendarCache() { return null; },
+      async saveCalendarCache() {}
     };
   }
 
@@ -55,6 +57,16 @@ export function createDatabase({ connectionString, ssl } = {}) {
       await pool.query(`
         CREATE INDEX IF NOT EXISTS extraction_cache_content_hash_idx
         ON extraction_cache (content_hash)
+      `);
+
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS calendar_cache (
+          game text NOT NULL,
+          lang text NOT NULL,
+          payload_json jsonb NOT NULL,
+          fetched_at timestamptz NOT NULL DEFAULT now(),
+          PRIMARY KEY (game, lang)
+        )
       `);
     },
 
@@ -193,6 +205,39 @@ export function createDatabase({ connectionString, ssl } = {}) {
           gameName,
           JSON.stringify(events)
         ]
+      );
+    },
+
+    async getCalendarCache({ game, lang }) {
+      const result = await pool.query(
+        `
+          SELECT payload_json, fetched_at
+          FROM calendar_cache
+          WHERE game = $1 AND lang = $2
+        `,
+        [game, lang]
+      );
+
+      const row = result.rows[0];
+      if (!row) return null;
+
+      return {
+        payload: row.payload_json,
+        fetchedAt: row.fetched_at
+      };
+    },
+
+    async saveCalendarCache({ game, lang, payload }) {
+      await pool.query(
+        `
+          INSERT INTO calendar_cache (game, lang, payload_json, fetched_at)
+          VALUES ($1, $2, $3::jsonb, now())
+          ON CONFLICT (game, lang)
+          DO UPDATE SET
+            payload_json = EXCLUDED.payload_json,
+            fetched_at = now()
+        `,
+        [game, lang, JSON.stringify(payload)]
       );
     },
 

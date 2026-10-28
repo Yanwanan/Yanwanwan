@@ -10,8 +10,6 @@ final class ActivityService {
     var errorMessage: String? = nil
     var lastUpdated: Date? = nil
 
-    private let baseURL = "https://api.ennead.cc"
-
     // Refresh: fetch API for all followed games, fall back to cache on failure.
     func refresh(preferences: UserPreferences) async {
         guard !isLoading else { return }
@@ -105,7 +103,10 @@ final class ActivityService {
     private struct GameNotSupported: Error {}
 
     private func fetchCalendar(for game: HoYoGame, lang: String = "zh-cn") async throws -> CalendarResponse {
-        let url = URL(string: "\(baseURL)/mihoyo/\(game.rawValue)/calendar?lang=\(lang)")!
+        // 经自己的后端缓存代理请求，上游不可用时后端会返回最近一次成功的数据。
+        guard let url = APIConfig.calendarURL(game: game.rawValue, lang: lang) else {
+            throw URLError(.badURL)
+        }
         var req = URLRequest(url: url)
         req.timeoutInterval = 15
         let (data, response) = try await URLSession.shared.data(for: req)

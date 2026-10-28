@@ -16,6 +16,10 @@ enum APIConfig {
         URL(string: "\(trimmedAIBackendBaseURL)/api/quota")
     }
 
+    static func calendarURL(game: String, lang: String) -> URL? {
+        URL(string: "\(trimmedAIBackendBaseURL)/api/calendar/\(game)?lang=\(lang)")
+    }
+
     static var privacyPolicyURL: URL? {
         URL(string: "\(trimmedAIBackendBaseURL)/privacy")
     }
