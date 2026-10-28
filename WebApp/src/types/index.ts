@@ -8,13 +8,6 @@ export interface GameEvent {
   isDone: boolean
 }
 
-export interface ExchangeCode {
-  id: string
-  code: string
-  description: string
-  isNew?: boolean
-}
-
 export interface Game {
   id: string
   name: string
@@ -22,7 +15,6 @@ export interface Game {
   headerColor: string
   accentColor: string
   events: GameEvent[]
-  exchangeCodes?: ExchangeCode[]
 }
 
 export function getUrgency(remaining: number, isDone: boolean): Urgency {

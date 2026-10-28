@@ -10,10 +10,6 @@ export const mockGames: Game[] = [
     emoji: '🌸',
     headerColor: '#7B5EA7',
     accentColor: '#9B7BC7',
-    exchangeCodes: [
-      { id: 'gc1', code: 'PFY1S40I88T9', description: 'Primogem ×60  Adventurer\'s Experience ×5', isNew: true },
-      { id: 'gc2', code: 'NMI20MAJGIBP', description: 'Primogem ×20  Geode of Replenishment ×3', isNew: false },
-    ],
     events: [
       { id: 'g1', title: '渊月螺旋',         endTimestamp: h(6.3),   category: '挑战', isDone: false },
       { id: 'g2', title: '勇锐魁杰试炼战记', endTimestamp: h(54),    category: '活动', isDone: false },
@@ -29,9 +25,6 @@ export const mockGames: Game[] = [
     emoji: '⭐',
     headerColor: '#4A72C4',
     accentColor: '#6A92E4',
-    exchangeCodes: [
-      { id: 'sc1', code: 'STARRAIL2025', description: 'Stellar Jade ×50  Credit ×10000', isNew: true },
-    ],
     events: [
       { id: 's1', title: '「银河际线」限定活动', endTimestamp: h(30),  category: '活动', isDone: false },
       { id: 's2', title: '混沌回忆第14期',       endTimestamp: h(114), category: '挑战', isDone: false },

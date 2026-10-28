@@ -4,10 +4,7 @@ import SwiftData
 @main
 struct Object1App: App {
     @State private var activityService = ActivityService()
-    @State private var codeService     = CodeService()
     @State private var purchaseService = PurchaseService()
-    @State private var showSplash      = true
-    @Environment(\.scenePhase) private var scenePhase
 
     init() {
         applyAppearance()
@@ -35,7 +32,7 @@ struct Object1App: App {
     }
 
     // Uses CloudKit when iCloud entitlement is available, falls back to local store otherwise.
-    // On any failure, resets the local store files and retries to survive migration errors.
+    // If persistent storage fails, keep the on-disk data intact and run in memory.
     private let modelContainer: ModelContainer = {
         let schema = Schema([UserPreferences.self, CustomGame.self, CustomEvent.self])
 
@@ -53,39 +50,76 @@ struct Object1App: App {
             return try ModelContainer(for: schema, configurations: [config])
         }
 
+        func makeInMemory() throws -> ModelContainer {
+            let config = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true, groupContainer: .none)
+            return try ModelContainer(for: schema, configurations: [config])
+        }
+
         do {
             return try makeLocal()
         } catch {
-            // Store corrupted — reset and retry
-            let storeURL = URL.applicationSupportDirectory.appending(component: "default.store")
-            try? FileManager.default.removeItem(at: storeURL)
-            try? FileManager.default.removeItem(at: storeURL.appendingPathExtension("shm"))
-            try? FileManager.default.removeItem(at: storeURL.appendingPathExtension("wal"))
-            return try! makeLocal()
+            if let fallback = try? makeInMemory() {
+                return fallback
+            }
+            fatalError("Unable to create SwiftData store: \(error.localizedDescription)")
         }
     }()
 
     var body: some Scene {
+        // Keep this closure free of state. SwiftUI may re-run it on its async render thread
+        // while an animation is playing, and a main-actor closure traps there. All changing
+        // state lives in AppRootView, whose body SwiftUI always evaluates on the main thread.
         WindowGroup {
-            ZStack {
+            AppRootView(
+                modelContainer: modelContainer,
+                activityService: activityService,
+                purchaseService: purchaseService
+            )
+        }
+    }
+}
+
+// Privacy consent, the splash screen and the app itself, plus foreground housekeeping.
+private struct AppRootView: View {
+    let modelContainer: ModelContainer
+    let activityService: ActivityService
+    let purchaseService: PurchaseService
+
+    @State private var showSplash = true
+    @AppStorage(PrivacyConsent.acceptedVersionKey) private var acceptedPrivacyVersion = ""
+    @Environment(\.scenePhase) private var scenePhase
+
+    var body: some View {
+        ZStack {
+            if acceptedPrivacyVersion == ComplianceConfig.privacyVersion {
                 ContentView()
                     .modelContainer(modelContainer)
                     .environment(activityService)
-                    .environment(codeService)
                     .environment(purchaseService)
-
-                if showSplash {
-                    SplashView { showSplash = false }
-                        .transition(.opacity)
-                        .zIndex(1)
+                    .transition(.opacity)
+            } else {
+                PrivacyConsentView {
+                    acceptedPrivacyVersion = ComplianceConfig.privacyVersion
+                    startConsentedServices()
                 }
+                .transition(.opacity)
             }
-            .animation(.easeOut(duration: 0.35), value: showSplash)
-            .onAppear {
-                NotificationManager.shared.modelContainer = modelContainer
-                NotificationManager.shared.activityService = activityService
-                NotificationManager.shared.requestPermission()
-                purchaseService.start()
+
+            if showSplash && acceptedPrivacyVersion == ComplianceConfig.privacyVersion {
+                SplashView { showSplash = false }
+                    .transition(.opacity)
+                    .zIndex(1)
+            }
+        }
+        .animation(.easeOut(duration: 0.35), value: showSplash)
+        .background(FullScreenWindowRequest())
+        .onAppear {
+            NotificationManager.shared.modelContainer = modelContainer
+            NotificationManager.shared.activityService = activityService
+            if acceptedPrivacyVersion == ComplianceConfig.privacyVersion {
+                startConsentedServices()
+            } else {
+                showSplash = false
             }
         }
         .onChange(of: scenePhase) { _, phase in
@@ -95,6 +129,36 @@ struct Object1App: App {
                 NotificationManager.shared.clearDeliveredNotifications()
                 NotificationManager.shared.clearBadge()
             }
+        }
+    }
+
+    private func startConsentedServices() {
+        NotificationManager.shared.requestPermission()
+        purchaseService.start()
+    }
+}
+
+// iPad windowed multitasking opens every app as a window and ignores UIRequiresFullScreen.
+// A minimum size as large as the screen leaves the system no smaller window to offer.
+private struct FullScreenWindowRequest: UIViewRepresentable {
+    func makeUIView(context: Context) -> RequestView {
+        let view = RequestView()
+        view.isUserInteractionEnabled = false
+        return view
+    }
+
+    func updateUIView(_ view: RequestView, context: Context) {}
+
+    final class RequestView: UIView {
+        override func didMoveToWindow() {
+            super.didMoveToWindow()
+            guard traitCollection.userInterfaceIdiom == .pad,
+                  let scene = window?.windowScene else { return }
+            // iPad runs landscape only, so the long side is the width.
+            let screen = scene.screen.bounds.size
+            let size = CGSize(width: max(screen.width, screen.height), height: min(screen.width, screen.height))
+            scene.sizeRestrictions?.minimumSize = size
+            scene.sizeRestrictions?.maximumSize = size
         }
     }
 }

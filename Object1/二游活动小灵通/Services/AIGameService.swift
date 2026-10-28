@@ -13,7 +13,7 @@ final class AIGameService {
 
     // MARK: - Entry point
 
-    func canStartExtraction(entitlementTier: EntitlementTier) async -> Bool {
+    func canStartExtraction(entitlementTier: EntitlementTier, appStoreTransactionJWS: String? = nil) async -> Bool {
         guard APIConfig.isAIBackendConfigured, let url = APIConfig.quotaURL else {
             errorMessage = "请先部署提取后端，并在 APIConfig.swift 填入后端地址"
             return false
@@ -26,8 +26,7 @@ final class AIGameService {
 
         var req = URLRequest(url: url)
         req.httpMethod = "GET"
-        req.setValue(InstallID.current, forHTTPHeaderField: "X-Install-ID")
-        req.setValue(entitlementTier.backendHeaderValue, forHTTPHeaderField: "X-Entitlement-Tier")
+        applyBackendAuthHeaders(to: &req, appStoreTransactionJWS: appStoreTransactionJWS)
         req.timeoutInterval = 20
 
         do {
@@ -48,7 +47,7 @@ final class AIGameService {
                 return true
             }
 
-            quotaLimitMessage = entitlementTier.extractionLimitMessage
+            quotaLimitMessage = quota.message ?? entitlementTier.extractionLimitMessage
             return false
         } catch {
             if let urlError = error as? URLError {
@@ -60,7 +59,13 @@ final class AIGameService {
         }
     }
 
-    func extractEvents(from text: String, gameName: String, articleURL: URL?, entitlementTier: EntitlementTier) async -> [AIEventDraft] {
+    func extractEvents(
+        from text: String,
+        gameName: String,
+        articleURL: URL?,
+        entitlementTier: EntitlementTier,
+        appStoreTransactionJWS: String? = nil
+    ) async -> [AIEventDraft] {
         guard APIConfig.isAIBackendConfigured, APIConfig.aiExtractorURL != nil else {
             errorMessage = "请先部署提取后端，并在 APIConfig.swift 填入后端地址"
             return []
@@ -75,17 +80,24 @@ final class AIGameService {
             searchText: text,
             gameName: gameName,
             articleURL: articleURL,
-            entitlementTier: entitlementTier
+            entitlementTier: entitlementTier,
+            appStoreTransactionJWS: appStoreTransactionJWS
         )
         if drafts.isEmpty && errorMessage == nil && quotaLimitMessage == nil {
-            errorMessage = "小的没找到游戏内活动，请确认页面内容是否为版本公告"
+            errorMessage = "婉婉没在这页找到活动，确认一下是不是版本公告？"
         }
         return drafts
     }
 
     // MARK: - Backend JSON extraction
 
-    private func backendExtract(searchText: String, gameName: String, articleURL: URL?, entitlementTier: EntitlementTier) async -> [AIEventDraft] {
+    private func backendExtract(
+        searchText: String,
+        gameName: String,
+        articleURL: URL?,
+        entitlementTier: EntitlementTier,
+        appStoreTransactionJWS: String?
+    ) async -> [AIEventDraft] {
         let bjTZ = TimeZone(identifier: "Asia/Shanghai")!
         var cal = Calendar.current
         cal.timeZone = bjTZ
@@ -113,8 +125,7 @@ final class AIGameService {
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        req.setValue(InstallID.current, forHTTPHeaderField: "X-Install-ID")
-        req.setValue(entitlementTier.backendHeaderValue, forHTTPHeaderField: "X-Entitlement-Tier")
+        applyBackendAuthHeaders(to: &req, appStoreTransactionJWS: appStoreTransactionJWS)
         req.httpBody        = bodyData
         req.timeoutInterval = 120
 
@@ -122,8 +133,12 @@ final class AIGameService {
             let (data, response) = try await URLSession.shared.data(for: req)
             if let http = response as? HTTPURLResponse, http.statusCode != 200 {
                 let apiError = try? JSONDecoder().decode(ExtractionErrorResponse.self, from: data)
-                if http.statusCode == 429 || apiError?.error == "daily_limit_exceeded" {
-                    quotaLimitMessage = entitlementTier.extractionLimitMessage
+                if apiError?.error == "daily_limit_exceeded" {
+                    quotaLimitMessage = apiError?.message ?? entitlementTier.extractionLimitMessage
+                    return []
+                }
+                if apiError?.error == "rate_limited" {
+                    errorMessage = apiError?.message ?? "请求过于频繁，请稍后再试"
                     return []
                 }
                 let message = apiError?.message ?? String(data: data, encoding: .utf8) ?? ""
@@ -172,6 +187,17 @@ final class AIGameService {
 
     // MARK: - Codable models
 
+    private func applyBackendAuthHeaders(to request: inout URLRequest, appStoreTransactionJWS: String?) {
+        request.setValue(InstallID.current, forHTTPHeaderField: "X-Install-ID")
+
+        guard let appStoreTransactionJWS,
+              !appStoreTransactionJWS.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return
+        }
+
+        request.setValue(appStoreTransactionJWS, forHTTPHeaderField: "X-App-Store-Transaction")
+    }
+
     private struct ExtractionRequest: Encodable {
         let gameName: String
         let articleURL: String?
@@ -189,6 +215,7 @@ final class AIGameService {
 
     private struct QuotaResponse: Decodable {
         let canExtract: Bool
+        let message: String?
     }
 
     private struct RawEvent: Decodable {

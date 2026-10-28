@@ -33,11 +33,11 @@ struct OnboardingView: View {
                     .foregroundStyle(.teal)
                     .symbolEffect(.pulse)
 
-                Text("小的替您盯活动")
+                Text("婉婉帮你盯活动")
                     .font(.largeTitle)
                     .fontWeight(.bold)
 
-                Text("限时奖励不能白白错过。小的替您盯着活动，到点及时禀报。")
+                Text("限时奖励可不能错过！婉婉帮你盯着活动，快到点就叫你。")
                     .font(.body)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
@@ -46,11 +46,9 @@ struct OnboardingView: View {
 
             VStack(alignment: .leading, spacing: 20) {
                 featureRow(icon: "calendar.badge.exclamationmark", color: .orange,
-                           title: "活动倒计时", desc: "谁快到点，小的一眼呈上")
+                           title: "活动倒计时", desc: "哪个快结束，婉婉第一时间告诉你")
                 featureRow(icon: "bell.badge.fill", color: .red,
-                           title: "智能通知", desc: "每日清点，临期再来禀报")
-                featureRow(icon: "giftcard.fill", color: .pink,
-                           title: "前瞻兑换码", desc: "有新码时，小的替您收好")
+                           title: "智能通知", desc: "每天清点一次，快到期再提醒你")
             }
             .padding(.horizontal, 32)
 
@@ -59,7 +57,7 @@ struct OnboardingView: View {
             Button {
                 withAnimation { step = 1 }
             } label: {
-                Text("让小的开工")
+                Text("婉婉，开工！")
                     .font(.headline)
                     .frame(maxWidth: .infinity)
                     .padding()
@@ -86,7 +84,7 @@ struct OnboardingView: View {
                     .font(.title2)
                     .fontWeight(.bold)
 
-                Text("小的可同时盯多款游戏，之后也能在设置中调整。")
+                Text("婉婉可以同时盯好几款游戏，之后也能在设置里改。")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
@@ -132,11 +130,11 @@ struct OnboardingView: View {
                     .foregroundStyle(.green)
                     .symbolEffect(.pulse)
 
-                Text("小的准备好了")
+                Text("婉婉准备好啦")
                     .font(.largeTitle)
                     .fontWeight(.bold)
 
-                Text("小的会在后台为您拉取最新活动数据。\n建议开启通知权限，临期时才好及时禀报。")
+                Text("婉婉会在后台拉取最新活动。\n记得打开通知，快到期时才能及时叫你。")
                     .font(.body)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)

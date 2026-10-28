@@ -5,63 +5,61 @@ import Combine
 // Per-game detail page: shows events split into time-based sections.
 struct GameDetailView: View {
     let game: HoYoGame
+    // false when the page is the split view's detail root, where there is nothing to go back to.
+    var showsBackButton = true
 
     @Environment(ActivityService.self) private var service
-    @Environment(CodeService.self)     private var codeService
+    @Environment(AppRouter.self)       private var router
+    @Environment(\.isWideLayout) private var isWideLayout
     @Environment(\.dismiss)            private var dismiss
     @Query private var prefsQuery: [UserPreferences]
 
     @State private var now           = Date()
-    @State private var selectedEvent:    RemoteEvent? = nil
-    @State private var searchText        = ""
     @State private var showCompleteGuide = false
+    @State private var recentlyCompletedEventID: String? = nil
 
     private var prefs: UserPreferences? { prefsQuery.first }
 
-    private var filtered: [RemoteEvent] {
-        service.events.filter { event in
-            guard event.game == game else { return false }
-            if !searchText.isEmpty {
-                let q = searchText.lowercased()
-                return event.title.lowercased().contains(q)
-            }
-            return true
-        }
+    private var gameEvents: [RemoteEvent] {
+        service.events.filter { $0.game == game }
     }
 
     private var endingSoon: [RemoteEvent] {
-        filtered
+        gameEvents
             .filter { $0.remaining > 0 && $0.remaining <= 7 * 24 * 3600 && !$0.isDone }
             .sorted { $0.endDate < $1.endDate }
     }
 
     private var endingLater: [RemoteEvent] {
-        filtered
+        gameEvents
             .filter { $0.remaining > 7 * 24 * 3600 && !$0.isDone }
             .sorted { $0.endDate < $1.endDate }
     }
 
     private var doneOrExpired: [RemoteEvent] {
-        filtered
+        gameEvents
             .filter { $0.isDone || $0.remaining <= 0 }
             .sorted { $0.endDate > $1.endDate }
     }
 
     var body: some View {
+        @Bindable var router = router
         ZStack {
             Color.hoyoBg.ignoresSafeArea(edges: .top)
 
             // Polka dot background
-            Canvas { ctx, size in
-                for row in stride(from: 0, through: size.height, by: 24) {
-                    for col in stride(from: 0, through: size.width, by: 24) {
-                        let r = CGRect(x: col - 1, y: row - 1, width: 2, height: 2)
-                        ctx.fill(Path(ellipseIn: r), with: .color(Color.hoyoNavy.opacity(0.05)))
+            if !isWideLayout {
+                Canvas { ctx, size in
+                    for row in stride(from: 0, through: size.height, by: 24) {
+                        for col in stride(from: 0, through: size.width, by: 24) {
+                            let r = CGRect(x: col - 1, y: row - 1, width: 2, height: 2)
+                            ctx.fill(Path(ellipseIn: r), with: .color(Color.hoyoNavy.opacity(0.05)))
+                        }
                     }
                 }
+                .ignoresSafeArea()
+                .allowsHitTesting(false)
             }
-            .ignoresSafeArea()
-            .allowsHitTesting(false)
 
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 20) {
@@ -74,98 +72,62 @@ struct GameDetailView: View {
                             .padding(.horizontal, 4)
                     }
 
-                    // Exchange codes
-                    let activeCodes = codeService.codes(for: game).filter { $0.isActive && $0.isLivestreamCode }
-                    if !activeCodes.isEmpty || codeService.isLoading {
+                    AdaptiveTwoColumn {
+                        // Ending soon
                         VStack(alignment: .leading, spacing: 10) {
                             detailSectionHeader(
-                                systemImage: "gift.fill",
+                                systemImage: "bolt.fill",
                                 iconBg: Color.hoyoPink,
-                                title: "前瞻兑换码",
-                                count: activeCodes.count
+                                title: "七日内临期",
+                                count: endingSoon.count
                             )
-                            if codeService.isLoading {
-                                HStack { Spacer(); ProgressView(); Spacer() }
-                                    .padding(.vertical, 20)
-                                    .background(Color.hoyoCardBg, in: RoundedRectangle(cornerRadius: 18))
+                            if endingSoon.isEmpty {
+                                emptyState(text: "暂无临期活动", sub: "7 天内没有急事，婉婉先待命。")
                             } else {
-                                VStack(spacing: 0) {
-                                    ForEach(Array(activeCodes.enumerated()), id: \.element.id) { idx, code in
-                                        if idx > 0 {
-                                            Rectangle()
-                                                .fill(Color.hoyoNavy.opacity(0.06))
-                                                .frame(height: 1)
-                                                .padding(.horizontal, 16)
-                                        }
-                                        ExchangeCodeRow(
-                                            code: code,
-                                            isSeen: prefs?.hasSeenCode(code.id) ?? false,
-                                            onCopy: {
-                                                UIPasteboard.general.string = code.code
-                                                prefs?.markCodeSeen(code.id)
-                                            }
-                                        )
+                                VStack(spacing: 8) {
+                                    ForEach(endingSoon) { event in
+                                        EventRowView(
+                                            event: event, showGameTag: false,
+                                            isMuted: prefs?.isMuted(event.id) ?? false,
+                                            onTap: { router.remoteEvent = event },
+                                            onToggleMute: { toggleMute(event) }
+                                        ) { toggleDone(event) }
                                     }
                                 }
-                                .background(Color.hoyoCardBg, in: RoundedRectangle(cornerRadius: 18))
-                                .overlay(RoundedRectangle(cornerRadius: 18).stroke(Color.hoyoNavy.opacity(0.10), lineWidth: 1.5))
-                                .shadow(color: Color.hoyoNavy.opacity(0.06), radius: 10, x: 0, y: 3)
+                                .animation(HoyoMotion.layout, value: endingSoon.map(\.id))
+                                HStack(spacing: 4) {
+                                    Image(systemName: "hand.tap")
+                                        .font(.caption2)
+                                    Text("轻触查看 B站攻略，长按可静音或标记完成")
+                                        .font(.caption)
+                                }
+                                .foregroundStyle(Color.hoyoNavy.opacity(0.30))
+                                .padding(.top, 2)
                             }
                         }
-                    }
-
-                    // Ending soon
-                    VStack(alignment: .leading, spacing: 10) {
-                        detailSectionHeader(
-                            systemImage: "bolt.fill",
-                            iconBg: Color.hoyoPink,
-                            title: "七日内临期",
-                            count: endingSoon.count
-                        )
-                        if endingSoon.isEmpty {
-                            emptyState(text: "暂无临期活动", sub: "七日内暂无急事，小的先候着。")
-                        } else {
-                            VStack(spacing: 8) {
-                                ForEach(endingSoon) { event in
-                                    EventRowView(
-                                        event: event, showGameTag: false,
-                                        isMuted: prefs?.isMuted(event.id) ?? false,
-                                        onTap: { selectedEvent = event },
-                                        onToggleMute: { toggleMute(event) }
-                                    ) { toggleDone(event) }
+                    } trailing: {
+                        // Ending later
+                        VStack(alignment: .leading, spacing: 10) {
+                            detailSectionHeader(
+                                systemImage: "calendar",
+                                iconBg: Color.hoyoMint,
+                                title: "七日后待办",
+                                count: endingLater.count
+                            )
+                            if endingLater.isEmpty {
+                                emptyState(text: "暂无待办活动", sub: "后面暂时没有待办，婉婉继续盯着。")
+                            } else {
+                                VStack(spacing: 8) {
+                                    ForEach(endingLater) { event in
+                                        EventRowView(
+                                            event: event, showGameTag: false,
+                                            isMuted: prefs?.isMuted(event.id) ?? false,
+                                            onTap: { router.remoteEvent = event },
+                                            onToggleMute: { toggleMute(event) }
+                                        ) { toggleDone(event) }
+                                    }
                                 }
-                            }
-                            HStack(spacing: 4) {
-                                Image(systemName: "hand.tap")
-                                    .font(.caption2)
-                                Text("轻触查看 B站攻略，长按可静音或标记完成")
-                                    .font(.caption)
-                            }
-                            .foregroundStyle(Color.hoyoNavy.opacity(0.30))
-                            .padding(.top, 2)
-                        }
-                    }
-
-                    // Ending later
-                    VStack(alignment: .leading, spacing: 10) {
-                        detailSectionHeader(
-                            systemImage: "calendar",
-                            iconBg: Color.hoyoMint,
-                            title: "七日后待办",
-                            count: endingLater.count
-                        )
-                        if endingLater.isEmpty {
-                            emptyState(text: "暂无待办活动", sub: "后面暂无待办，小的继续盯着。")
-                        } else {
-                            VStack(spacing: 8) {
-                                ForEach(endingLater) { event in
-                                    EventRowView(
-                                        event: event, showGameTag: false,
-                                        isMuted: prefs?.isMuted(event.id) ?? false,
-                                        onTap: { selectedEvent = event },
-                                        onToggleMute: { toggleMute(event) }
-                                    ) { toggleDone(event) }
-                                }
+                                .animation(HoyoMotion.layout, value: endingLater.map(\.id))
                             }
                         }
                     }
@@ -183,10 +145,12 @@ struct GameDetailView: View {
                                 ForEach(doneOrExpired) { event in
                                     EventRowView(
                                         event: event, showGameTag: false,
-                                        onTap: { selectedEvent = event }
+                                        onTap: { router.remoteEvent = event },
+                                        playCompletionArrival: recentlyCompletedEventID == event.id
                                     ) { toggleDone(event) }
                                 }
                             }
+                            .animation(HoyoMotion.layout, value: doneOrExpired.map(\.id))
                             .opacity(0.60)
                         }
                     }
@@ -199,16 +163,12 @@ struct GameDetailView: View {
         .navigationBarBackButtonHidden(true)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar { toolbarContent }
-        .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: .automatic), prompt: "搜索活动")
-        .navigationDestination(item: $selectedEvent) { event in
+        .navigationDestination(item: $router.remoteEvent) { event in
             EventGuideView(event: event)
+                .verticalBarNavigation()
         }
         .onReceive(Timer.publish(every: 60, on: .main, in: .common).autoconnect()) { date in
             now = date
-        }
-        .task {
-            let seenIds = Set(prefs?.seenCodeIds ?? [])
-            await codeService.refresh(games: [game], seenIds: seenIds) { _ in }
         }
         .sheet(isPresented: $showCompleteGuide) { CompleteTaskGuideSheet() }
     }
@@ -255,12 +215,14 @@ struct GameDetailView: View {
     private var toolbarContent: some ToolbarContent {
         // Custom back button
         ToolbarItem(placement: .topBarLeading) {
-            Button { dismiss() } label: {
-                Image(systemName: "chevron.left")
-                    .font(.system(size: 14, weight: .bold))
-                    .foregroundStyle(.white)
-                    .frame(width: 36, height: 36)
-                    .background(Color.hoyoNavy, in: RoundedRectangle(cornerRadius: 10))
+            if showsBackButton {
+                Button { dismiss() } label: {
+                    Image(systemName: "chevron.left")
+                        .font(.system(size: 14, weight: .bold))
+                        .foregroundStyle(.white)
+                        .frame(width: 36, height: 36)
+                        .background(Color.hoyoNavy, in: RoundedRectangle(cornerRadius: 10))
+                }
             }
         }
 
@@ -299,9 +261,17 @@ struct GameDetailView: View {
     private func toggleDone(_ event: RemoteEvent) {
         guard let p = prefs else { return }
         if event.isDone {
+            recentlyCompletedEventID = nil
             p.markIncomplete(event.id)
         } else {
+            recentlyCompletedEventID = event.id
             p.markCompleted(event.id)
+            Task { @MainActor in
+                try? await Task.sleep(for: .milliseconds(1200))
+                if recentlyCompletedEventID == event.id {
+                    recentlyCompletedEventID = nil
+                }
+            }
         }
         service.applyCompletion(completedIds: Set(p.completedEventIds))
         NotificationManager.shared.rescheduleAll()

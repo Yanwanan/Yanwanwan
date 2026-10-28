@@ -1,0 +1,90 @@
+{
+  "appPolicies" : {
+    "eula" : "",
+    "policies" : [
+      {
+        "locale" : "zh_CN",
+        "policyText" : "",
+        "policyURL" : ""
+      }
+    ]
+  },
+  "identifier" : "B81E9ED3",
+  "nonRenewingSubscriptions" : [
+
+  ],
+  "products" : [
+    {
+      "displayPrice" : "28",
+      "familyShareable" : false,
+      "internalID" : "59FCCF61",
+      "localizations" : [
+        {
+          "description" : "解锁 10 个自定义游戏和每日 5 次 AI 公告提取额度。",
+          "displayName" : "一休尼会员",
+          "locale" : "zh_CN"
+        }
+      ],
+      "productID" : "ailesson.path.Object1.premium.lifetime",
+      "referenceName" : "一休尼会员",
+      "type" : "NonConsumable"
+    }
+  ],
+  "settings" : {
+    "_askToBuyEnabled" : false,
+    "_billingGracePeriodEnabled" : false,
+    "_billingIssuesEnabled" : false,
+    "_disableDialogs" : false,
+    "_failTransactionsEnabled" : false,
+    "_locale" : "zh_CN",
+    "_renewalBillingIssuesEnabled" : false,
+    "_storefront" : "CHN",
+    "_storeKitErrors" : [
+
+    ],
+    "_timeRate" : 0
+  },
+  "subscriptionGroups" : [
+    {
+      "id" : "C16F198D",
+      "localizations" : [
+
+      ],
+      "name" : "会员",
+      "subscriptions" : [
+        {
+          "adHocOffers" : [
+
+          ],
+          "codeOffers" : [
+
+          ],
+          "displayPrice" : "3",
+          "familyShareable" : false,
+          "groupNumber" : 1,
+          "internalID" : "2312F34C",
+          "introductoryOffer" : null,
+          "localizations" : [
+            {
+              "description" : "解锁 10 个自定义游戏和每日 5 次 AI 公告提取额度。",
+              "displayName" : "月度会员",
+              "locale" : "zh_CN"
+            }
+          ],
+          "productID" : "ailesson.path.Object1.premium.monthly",
+          "recurringSubscriptionPeriod" : "P1M",
+          "referenceName" : "月度会员",
+          "subscriptionGroupID" : "C16F198D",
+          "type" : "RecurringSubscription",
+          "winbackOffers" : [
+
+          ]
+        }
+      ]
+    }
+  ],
+  "version" : {
+    "major" : 4,
+    "minor" : 0
+  }
+}

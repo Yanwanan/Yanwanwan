@@ -4,61 +4,72 @@ import SwiftData
 // MARK: - Home: game card grid
 
 struct GameGridView: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(ActivityService.self) private var service
-    @Environment(PurchaseService.self) private var purchaseService
+    @Environment(AppRouter.self) private var router
+    @Environment(\.isWideLayout) private var isWideLayout
     @Environment(\.modelContext) private var modelContext
     @Query private var prefsQuery: [UserPreferences]
     @Query private var customGames: [CustomGame]
-    @State private var showAISearch      = false
-    @State private var showPremium       = false
     @State private var showCompleteGuide = false
     @State private var cardsAppeared     = false
-    @State private var addLimitMessage: String? = nil
+    @State private var wasRefreshing = false
+    @State private var showRefreshSuccess = false
+    @State private var hadErrorBeforeRefresh = false
+    @State private var showNetworkRecovered = false
+    @State private var cheerHop = 0
+    private static let cheerWidth: CGFloat = 140
 
     private var prefs: UserPreferences? { prefsQuery.first }
     private var followedGames: [HoYoGame] { prefs?.followedGames ?? [] }
 
     var body: some View {
-        NavigationStack {
-            Group {
-                if service.isLoading && service.events.isEmpty {
-                    skeletonGrid
-                } else if followedGames.isEmpty && customGames.isEmpty {
-                    emptyState
-                } else {
-                    cardGrid
+        Group {
+            if service.isLoading && service.events.isEmpty {
+                skeletonGrid
+            } else if followedGames.isEmpty && customGames.isEmpty {
+                emptyState
+            } else {
+                cardGrid
+            }
+        }
+        .sheet(isPresented: $showCompleteGuide) { CompleteTaskGuideSheet() }
+        .fontDesign(.rounded)
+        .onAppear {
+            cardsAppeared = false
+            withAnimation { cardsAppeared = true }
+        }
+        .refreshable {
+            if let p = prefs { await service.refresh(preferences: p) }
+        }
+        .task(id: prefs?.followedGameSlugs.joined()) {
+            guard let p = prefs else { return }
+            service.loadFromCache(preferences: p)
+            await service.refresh(preferences: p)
+        }
+        .onChange(of: service.isLoading) { oldValue, newValue in
+            if newValue {
+                wasRefreshing = true
+                hadErrorBeforeRefresh = service.errorMessage != nil
+                showRefreshSuccess = false
+            } else if oldValue && wasRefreshing && !service.events.isEmpty && service.errorMessage == nil {
+                wasRefreshing = false
+                showRefreshSuccess = true
+                UINotificationFeedbackGenerator().notificationOccurred(.success)
+                if hadErrorBeforeRefresh {
+                    showNetworkRecovered = true
+                }
+                hadErrorBeforeRefresh = false
+                Task { @MainActor in
+                    try? await Task.sleep(for: .milliseconds(900))
+                    withAnimation(.easeOut(duration: 0.2)) { showRefreshSuccess = false }
+                    try? await Task.sleep(for: .milliseconds(350))
+                    withAnimation(.easeOut(duration: 0.2)) { showNetworkRecovered = false }
                 }
             }
-            .sheet(isPresented: $showAISearch) { AIGameSearchView() }
-            .sheet(isPresented: $showPremium) { PremiumView() }
-            .sheet(isPresented: $showCompleteGuide) { CompleteTaskGuideSheet() }
-            .alert("自定义游戏已达上限", isPresented: Binding(
-                get: { addLimitMessage != nil },
-                set: { if !$0 { addLimitMessage = nil } }
-            )) {
-                if !purchaseService.isPremium {
-                    Button("升级会员") {
-                        addLimitMessage = nil
-                        showPremium = true
-                    }
-                }
-                Button("知道了", role: .cancel) {}
-            } message: {
-                Text(addLimitMessage ?? "")
-            }
-            .fontDesign(.rounded)
-            .onAppear {
-                cardsAppeared = false
-                withAnimation { cardsAppeared = true }
-            }
-            .refreshable {
-                if let p = prefs { await service.refresh(preferences: p) }
-            }
-            .task(id: prefs?.followedGameSlugs.joined()) {
-                guard let p = prefs else { return }
-                service.loadFromCache(preferences: p)
-                await service.refresh(preferences: p)
-            }
+        }
+        .onChange(of: service.errorMessage) { _, newValue in
+            if newValue != nil { hadErrorBeforeRefresh = true }
         }
     }
 
@@ -70,11 +81,10 @@ struct GameGridView: View {
             VStack(spacing: 16) {
                 customHeader
                 Spacer()
-                ContentUnavailableView {
-                    Label("还未选择游戏", systemImage: "gamecontroller")
-                } description: {
-                    Text("您还没选要盯的游戏，小的暂时无事可办。")
-                }
+                AnimatedEmptyState(
+                    title: "还未选择游戏",
+                    message: "老大还没选要盯的游戏，婉婉先待命。"
+                )
                 Spacer()
             }
         }
@@ -107,38 +117,55 @@ struct GameGridView: View {
             Color.hoyoBg.ignoresSafeArea(edges: .top)
 
             // Polka-dot background
-            Canvas { ctx, size in
-                for row in stride(from: 0, through: size.height, by: 22) {
-                    for col in stride(from: 0, through: size.width, by: 22) {
-                        let r = CGRect(x: col - 1.5, y: row - 1.5, width: 3, height: 3)
-                        ctx.fill(Path(ellipseIn: r), with: .color(Color.hoyoPink.opacity(0.12)))
+            if !isWideLayout {
+                Canvas { ctx, size in
+                    for row in stride(from: 0, through: size.height, by: 22) {
+                        for col in stride(from: 0, through: size.width, by: 22) {
+                            let r = CGRect(x: col - 1.5, y: row - 1.5, width: 3, height: 3)
+                            ctx.fill(Path(ellipseIn: r), with: .color(Color.hoyoPink.opacity(0.12)))
+                        }
                     }
                 }
+                .ignoresSafeArea()
+                .allowsHitTesting(false)
             }
-            .ignoresSafeArea()
-            .allowsHitTesting(false)
 
             ScrollView {
                 VStack(spacing: 0) {
                     customHeader
 
                     LazyVStack(spacing: 20) {
-                        if let msg = service.errorMessage {
+                        if showNetworkRecovered {
+                            Label("网络已恢复，活动已更新", systemImage: "checkmark.circle.fill")
+                                .foregroundStyle(Color.hoyoMint)
+                                .font(.footnote.weight(.bold))
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(.horizontal, 4)
+                                .padding(.trailing, isWideLayout ? 0 : Self.cheerWidth)
+                                .transition(.move(edge: .top).combined(with: .opacity))
+                        } else if let msg = service.errorMessage {
                             Label(msg, systemImage: "wifi.exclamationmark")
                                 .foregroundStyle(.orange)
                                 .font(.footnote)
                                 .frame(maxWidth: .infinity, alignment: .leading)
                                 .padding(.horizontal, 4)
+                                .padding(.trailing, isWideLayout ? 0 : Self.cheerWidth)
+                                .transition(.move(edge: .top).combined(with: .opacity))
                         }
 
                         overviewCard
-                        recentlyEndedCard
-                        gameListCard
+                        AdaptiveTwoColumn {
+                            recentlyEndedCard
+                        } trailing: {
+                            gameListCard
+                        }
 
-                        Color.clear.frame(height: 110)
+                        // Room for the floating tab bar, which the wide layout doesn't have.
+                        Color.clear.frame(height: isWideLayout ? 4 : 110)
                     }
                     .padding(.horizontal, 16)
                     .padding(.top, 14)
+                    .animation(reduceMotion ? .easeOut(duration: 0.15) : .spring(response: 0.35, dampingFraction: 0.78), value: service.errorMessage)
                 }
             }
         }
@@ -150,7 +177,7 @@ struct GameGridView: View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .top) {
                 VStack(alignment: .leading, spacing: 5) {
-                    Text("皇上请阅奏折")
+                    Text("老大的活动清单")
                         .font(.system(size: 28, weight: .black))
                         .foregroundStyle(Color.hoyoNavy)
                     Rectangle()
@@ -161,8 +188,21 @@ struct GameGridView: View {
                 }
                 Spacer()
                 HStack(spacing: 10) {
-                    if service.isLoading && !service.events.isEmpty {
-                        ProgressView().scaleEffect(0.75)
+                    if !service.events.isEmpty && (service.isLoading || showRefreshSuccess) {
+                        ZStack {
+                            if service.isLoading {
+                                ProgressView()
+                                    .scaleEffect(0.75)
+                                    .transition(.opacity)
+                            } else {
+                                Image(systemName: "checkmark.circle.fill")
+                                    .font(.system(size: 18, weight: .bold))
+                                    .foregroundStyle(Color.hoyoMint)
+                                    .transition(reduceMotion ? .opacity : .scale.combined(with: .opacity))
+                            }
+                        }
+                        .frame(width: 22, height: 22)
+                        .animation(reduceMotion ? .easeOut(duration: 0.15) : .spring(response: 0.3, dampingFraction: 0.65), value: service.isLoading)
                     }
                     // ? button — thick square cartoon style
                     Button { showCompleteGuide = true } label: {
@@ -175,17 +215,7 @@ struct GameGridView: View {
                             .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.hoyoNavy, lineWidth: 2.5))
                             .shadow(color: Color.hoyoNavy.opacity(0.20), radius: 0, x: 2, y: 2)
                     }
-                    // + button — pink filled square
-                    Button { openAddGame() } label: {
-                        Image(systemName: "plus")
-                            .font(.system(size: 17, weight: .black))
-                            .foregroundStyle(.white)
-                            .frame(width: 40, height: 40)
-                            .background(Color.hoyoPink)
-                            .clipShape(RoundedRectangle(cornerRadius: 12))
-                            .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.hoyoNavy, lineWidth: 2.5))
-                            .shadow(color: Color.hoyoNavy.opacity(0.20), radius: 0, x: 2, y: 2)
-                    }
+                    .buttonStyle(CartoonPressStyle())
                 }
             }
 
@@ -204,6 +234,9 @@ struct GameGridView: View {
             .clipShape(Capsule())
             .overlay(Capsule().stroke(Color.hoyoNavy, lineWidth: 2))
             .shadow(color: Color.hoyoNavy.opacity(0.18), radius: 0, x: 2, y: 2)
+            .overlay(Capsule().fill(Color.white.opacity(showRefreshSuccess ? 0.20 : 0)))
+            .scaleEffect(showRefreshSuccess && !reduceMotion ? 1.035 : 1)
+            .animation(.easeInOut(duration: 0.28), value: showRefreshSuccess)
         }
         .padding(.horizontal, 16)
         .padding(.top, 18)
@@ -217,33 +250,12 @@ struct GameGridView: View {
         return f.string(from: Date())
     }
 
-    private func openAddGame() {
-        guard customGames.count < purchaseService.tier.maxCustomGames else {
-            addLimitMessage = purchaseService.tier.customGameLimitMessage(currentCount: customGames.count)
-            return
-        }
-        showAISearch = true
-    }
-
     // MARK: - Overview Stats
 
-    private var totalPending: Int {
-        let remote = service.events.filter { $0.remaining > 0 && !$0.isDone }.count
-        let custom = customGames.flatMap(\.events).filter { $0.remaining > 0 && !$0.isDone }.count
-        return remote + custom
-    }
-
-    private var totalEndingSoon: Int {
-        let remote = service.events.filter { $0.remaining > 0 && $0.remaining <= 7 * 86400 && !$0.isDone }.count
-        let custom = customGames.flatMap(\.events).filter { $0.remaining > 0 && $0.remaining <= 7 * 86400 && !$0.isDone }.count
-        return remote + custom
-    }
-
-    private var totalDone: Int {
-        let remote = service.events.filter { $0.isDone }.count
-        let custom = customGames.flatMap(\.events).filter { $0.isDone }.count
-        return remote + custom
-    }
+    private var stats: ActivityStats { ActivityStats(remoteEvents: service.events, customGames: customGames) }
+    private var totalPending: Int    { stats.totalPending }
+    private var totalEndingSoon: Int { stats.totalEndingSoon }
+    private var totalDone: Int       { stats.totalDone }
 
     // Unified recent item for mixing RemoteEvent + CustomEvent
     private struct RecentItem: Identifiable {
@@ -277,7 +289,7 @@ struct GameGridView: View {
 
     private var overviewCard: some View {
         VStack(alignment: .leading, spacing: 12) {
-            dashSectionHeader(icon: "chart.bar.fill", iconColor: Color.hoyoPink, title: "今日呈报")
+            dashSectionHeader(icon: "chart.bar.fill", iconColor: Color.hoyoPink, title: "今日速报")
 
             HStack(spacing: 10) {
                 statPill(count: totalPending,    label: "待完成",  bg: Color.hoyoPink,   fg: .white)
@@ -290,6 +302,18 @@ struct GameGridView: View {
         .clipShape(RoundedRectangle(cornerRadius: 18))
         .overlay(RoundedRectangle(cornerRadius: 18).stroke(Color.hoyoNavy, lineWidth: 2.5))
         .shadow(color: Color.hoyoNavy.opacity(0.22), radius: 0, x: 3, y: 3)
+        // Wanwan stands behind the card holding up her ledger; the card hides her lower half.
+        // Unfolded, she stands at the bottom of the sidebar instead.
+        .background(alignment: .topTrailing) {
+            if !isWideLayout {
+                WanwanCheerView(width: Self.cheerWidth, stats: stats, hasGames: !followedGames.isEmpty || !customGames.isEmpty,
+                                offline: service.errorMessage != nil, hopTrigger: cheerHop)
+                    .offset(x: -10, y: -(Self.cheerWidth * WanwanCheerView.aspectRatio - 14))
+            }
+        }
+        .onChange(of: totalPending) { old, new in
+            if old > 0 && new == 0 { cheerHop += 1 }
+        }
     }
 
     @ViewBuilder
@@ -298,6 +322,8 @@ struct GameGridView: View {
             Text("\(count)")
                 .font(.system(size: 26, weight: .black, design: .rounded))
                 .foregroundStyle(fg)
+                .contentTransition(.numericText(value: Double(count)))
+                .animation(reduceMotion ? nil : .spring(response: 0.35, dampingFraction: 0.8), value: count)
             Text(label)
                 .font(.system(size: 11, weight: .bold))
                 .foregroundStyle(fg.opacity(0.85))
@@ -319,7 +345,7 @@ struct GameGridView: View {
                 .padding(.bottom, 10)
 
             if recentItems.isEmpty {
-                Text("7 天内暂无临期活动，小的先候着。")
+                Text("7 天内没有快结束的活动，婉婉先盯着。")
                     .font(.subheadline)
                     .foregroundStyle(Color.hoyoNavy.opacity(0.35))
                     .frame(maxWidth: .infinity)
@@ -382,7 +408,7 @@ struct GameGridView: View {
 
     private var gameListCard: some View {
         VStack(alignment: .leading, spacing: 0) {
-            dashSectionHeader(icon: "gamecontroller.fill", iconColor: Color(hex: "6B5EA8"), title: "朕的奏折")
+            dashSectionHeader(icon: "gamecontroller.fill", iconColor: Color(hex: "6B5EA8"), title: "我的游戏")
                 .padding(.horizontal, 16)
                 .padding(.top, 14)
                 .padding(.bottom, 10)
@@ -398,7 +424,7 @@ struct GameGridView: View {
                     if idx > 0 {
                         Rectangle().fill(Color.hoyoNavy.opacity(0.07)).frame(height: 1).padding(.horizontal, 16)
                     }
-                    NavigationLink { GameDetailView(game: game) } label: {
+                    NavigationLink(value: GameRoute.remote(game)) {
                         gameListRow(emoji: game.emoji, name: game.displayName,
                                     count: activeCount(for: game), color: game.cardHeaderColor)
                     }
@@ -406,11 +432,12 @@ struct GameGridView: View {
                 }
                 ForEach(Array(customGames.enumerated()), id: \.element.id) { idx, game in
                     Rectangle().fill(Color.hoyoNavy.opacity(0.07)).frame(height: 1).padding(.horizontal, 16)
-                    NavigationLink { CustomGameDetailView(game: game) } label: {
+                    NavigationLink(value: GameRoute.custom(game.id)) {
                         gameListRow(emoji: game.emoji, name: game.name,
                                     count: game.activeEvents.count, color: game.accentColor)
                     }
                     .buttonStyle(CardPressStyle())
+                    .transition(.scale(scale: 0.94).combined(with: .opacity))
                 }
             }
         }
@@ -418,6 +445,7 @@ struct GameGridView: View {
         .clipShape(RoundedRectangle(cornerRadius: 18))
         .overlay(RoundedRectangle(cornerRadius: 18).stroke(Color.hoyoNavy, lineWidth: 2.5))
         .shadow(color: Color.hoyoNavy.opacity(0.22), radius: 0, x: 3, y: 3)
+        .animation(reduceMotion ? .easeOut(duration: 0.15) : .spring(response: 0.38, dampingFraction: 0.8), value: customGames.map(\.id))
     }
 
     @ViewBuilder
@@ -477,33 +505,17 @@ struct GameGridView: View {
     // MARK: Helpers
 
     private func activeCount(for game: HoYoGame) -> Int {
-        service.events.filter { $0.game == game && $0.remaining > 0 && !$0.isDone }.count
-    }
-
-    private func totalCount(for game: HoYoGame) -> Int {
-        service.events.filter { $0.game == game && $0.remaining > 0 }.count
-    }
-
-    private func urgentEvent(for game: HoYoGame) -> RemoteEvent? {
-        service.events
-            .filter { $0.game == game && $0.remaining > 0 && !$0.isDone }
-            .min(by: { $0.remaining < $1.remaining })
-    }
-
-    private func topEvents(for game: HoYoGame) -> [RemoteEvent] {
-        Array(
-            service.events
-                .filter { $0.game == game && $0.remaining > 0 && !$0.isDone }
-                .sorted { $0.remaining < $1.remaining }
-                .prefix(2)
-        )
+        stats.activeCount(for: game)
     }
 }
 
 // MARK: - Games Tab
 
 struct GamesTabView: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(ActivityService.self) private var service
+    @Environment(AppRouter.self) private var router
+    @Environment(\.isWideLayout) private var isWideLayout
     @Environment(PurchaseService.self) private var purchaseService
     @Environment(\.modelContext)       private var modelContext
     @Query private var prefsQuery:  [UserPreferences]
@@ -511,16 +523,18 @@ struct GamesTabView: View {
     @State private var showAISearch  = false
     @State private var showPremium   = false
     @State private var cardsAppeared = false
+    @State private var showAddGameSuccess = false
+    @Environment(\.gameZoomNamespace) private var gameNavigationAnimation
     @State private var addLimitMessage: String? = nil
 
     private var prefs:        UserPreferences? { prefsQuery.first }
     private var followedGames: [HoYoGame]      { prefs?.followedGames ?? [] }
 
     var body: some View {
-        NavigationStack {
-            ZStack {
-                Color.hoyoBg.ignoresSafeArea(edges: .top)
+        ZStack {
+            Color.hoyoBg.ignoresSafeArea(edges: .top)
 
+            if !isWideLayout {
                 Canvas { ctx, size in
                     for row in stride(from: 0, through: size.height, by: 22) {
                         for col in stride(from: 0, through: size.width, by: 22) {
@@ -531,88 +545,64 @@ struct GamesTabView: View {
                 }
                 .ignoresSafeArea()
                 .allowsHitTesting(false)
+            }
 
-                if followedGames.isEmpty && customGames.isEmpty {
-                    VStack(spacing: 16) {
+            if followedGames.isEmpty && customGames.isEmpty {
+                VStack(spacing: 16) {
+                    gamesHeader
+                    Spacer()
+                    AnimatedEmptyState(
+                        title: "还没有游戏",
+                        message: "点右上角 + 添加自定义游戏，或在设置中关注米哈游游戏。"
+                    )
+                    Spacer()
+                }
+            } else {
+                ScrollView {
+                    VStack(spacing: 0) {
                         gamesHeader
-                        Spacer()
-                        ContentUnavailableView {
-                            Label("还没有游戏", systemImage: "gamecontroller")
-                        } description: {
-                            Text("点右上角 + 添加自定义游戏，或在设置中关注米哈游游戏。")
-                        }
-                        Spacer()
-                    }
-                } else {
-                    ScrollView {
-                        VStack(spacing: 0) {
-                            gamesHeader
 
-                            LazyVStack(spacing: 20) {
-                                ForEach(Array(followedGames.enumerated()), id: \.element.rawValue) { index, game in
-                                    NavigationLink {
-                                        GameDetailView(game: game)
-                                    } label: {
-                                        GameCard(
-                                            game: game,
-                                            activeCount: activeCount(for: game),
-                                            totalCount: totalCount(for: game),
-                                            urgentEvent: urgentEvent(for: game),
-                                            topEvents: topEvents(for: game)
-                                        )
-                                    }
-                                    .buttonStyle(CardPressStyle())
-                                    .opacity(cardsAppeared ? 1 : 0)
-                                    .offset(y: cardsAppeared ? 0 : 28)
-                                    .animation(.spring(response: 0.5, dampingFraction: 0.72).delay(Double(index) * 0.09), value: cardsAppeared)
-                                }
-
-                                ForEach(Array(customGames.enumerated()), id: \.element.id) { index, game in
-                                    NavigationLink {
-                                        CustomGameDetailView(game: game)
-                                    } label: {
-                                        CustomGameCard(game: game)
-                                    }
-                                    .buttonStyle(CardPressStyle())
-                                    .opacity(cardsAppeared ? 1 : 0)
-                                    .offset(y: cardsAppeared ? 0 : 28)
-                                    .animation(.spring(response: 0.5, dampingFraction: 0.72).delay(Double(followedGames.count + index) * 0.09), value: cardsAppeared)
-                                }
-
-                                Text("✦ 以上就是小的今日呈报 ✦")
-                                    .font(.caption2).fontWeight(.semibold)
-                                    .foregroundStyle(Color.hoyoPink.opacity(0.45))
-                                    .frame(maxWidth: .infinity, alignment: .center)
-                                    .padding(.top, 4)
-                                    .padding(.bottom, 110)
+                        // One column on phones, two when the Duo unfolds.
+                        VStack(spacing: 20) {
+                            LazyVGrid(columns: [GridItem(.adaptive(minimum: 300), spacing: 20, alignment: .top)],
+                                      spacing: isWideLayout ? 28 : 20) {
+                                gameCards
                             }
-                            .padding(.horizontal, 16)
-                            .padding(.top, 14)
+                            .padding(.top, isWideLayout ? 12 : 0)
+                            footer
+                                .padding(.bottom, isWideLayout ? 24 : 110)
                         }
+                        .padding(.horizontal, 16)
+                        .padding(.top, 14)
+                        .animation(reduceMotion ? .easeOut(duration: 0.15) : .spring(response: 0.38, dampingFraction: 0.8), value: customGames.map(\.id))
                     }
                 }
             }
-            .sheet(isPresented: $showAISearch) { AIGameSearchView() }
-            .sheet(isPresented: $showPremium) { PremiumView() }
-            .alert("自定义游戏已达上限", isPresented: Binding(
-                get: { addLimitMessage != nil },
-                set: { if !$0 { addLimitMessage = nil } }
-            )) {
-                if !purchaseService.isPremium {
-                    Button("升级会员") {
-                        addLimitMessage = nil
-                        showPremium = true
-                    }
+        }
+        .sheet(isPresented: $showAISearch) { AIGameSearchView() }
+        .onChange(of: customGames.count) { oldCount, newCount in
+            guard newCount > oldCount else { return }
+            playAddGameSuccess()
+        }
+        .sheet(isPresented: $showPremium) { PremiumView() }
+        .alert("自定义游戏已达上限", isPresented: Binding(
+            get: { addLimitMessage != nil },
+            set: { if !$0 { addLimitMessage = nil } }
+        )) {
+            if !purchaseService.isPremium {
+                Button("升级会员") {
+                    addLimitMessage = nil
+                    showPremium = true
                 }
-                Button("知道了", role: .cancel) {}
-            } message: {
-                Text(addLimitMessage ?? "")
             }
-            .fontDesign(.rounded)
-            .onAppear {
-                cardsAppeared = false
-                withAnimation { cardsAppeared = true }
-            }
+            Button("知道了", role: .cancel) {}
+        } message: {
+            Text(addLimitMessage ?? "")
+        }
+        .fontDesign(.rounded)
+        .onAppear {
+            cardsAppeared = false
+            withAnimation { cardsAppeared = true }
         }
     }
 
@@ -621,7 +611,7 @@ struct GamesTabView: View {
     private var gamesHeader: some View {
         HStack(alignment: .top) {
             VStack(alignment: .leading, spacing: 5) {
-                Text("朕的奏折")
+                Text("我的游戏")
                     .font(.system(size: 28, weight: .black))
                     .foregroundStyle(Color.hoyoNavy)
                 Rectangle()
@@ -632,13 +622,15 @@ struct GamesTabView: View {
             }
             Spacer()
             Button { openAddGame() } label: {
-                Image(systemName: "plus")
+                Image(systemName: showAddGameSuccess ? "checkmark" : "plus")
                     .font(.system(size: 17, weight: .black))
                     .foregroundStyle(.white)
                     .frame(width: 40, height: 40)
                     .background(Color.hoyoPink)
                     .clipShape(RoundedRectangle(cornerRadius: 12))
                     .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.hoyoNavy, lineWidth: 2.5))
+                    .contentTransition(.symbolEffect(.replace))
+                    .rotationEffect(.degrees(showAddGameSuccess ? 360 : 0))
                     .shadow(color: Color.hoyoNavy.opacity(0.20), radius: 0, x: 2, y: 2)
             }
         }
@@ -655,14 +647,67 @@ struct GamesTabView: View {
         showAISearch = true
     }
 
+    private func playAddGameSuccess() {
+        showAddGameSuccess = true
+        UINotificationFeedbackGenerator().notificationOccurred(.success)
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(850))
+            withAnimation(.easeOut(duration: 0.2)) { showAddGameSuccess = false }
+        }
+    }
+
+    // MARK: Cards
+
+    @ViewBuilder
+    private var gameCards: some View {
+        ForEach(Array(followedGames.enumerated()), id: \.element.rawValue) { index, game in
+            NavigationLink(value: GameRoute.remote(game)) {
+                GameCard(
+                    game: game,
+                    activeCount: activeCount(for: game),
+                    totalCount: totalCount(for: game),
+                    urgentEvent: urgentEvent(for: game),
+                    topEvents: topEvents(for: game)
+                )
+            }
+            .buttonStyle(CardPressStyle())
+            .gameNavigationSource(id: game.rawValue, in: gameNavigationAnimation)
+            .opacity(cardsAppeared ? 1 : 0)
+            .offset(y: cardsAppeared ? 0 : 28)
+            .animation(.spring(response: 0.5, dampingFraction: 0.72).delay(Double(index) * 0.09), value: cardsAppeared)
+        }
+
+        ForEach(Array(customGames.enumerated()), id: \.element.id) { index, game in
+            NavigationLink(value: GameRoute.custom(game.id)) {
+                CustomGameCard(game: game)
+            }
+            .buttonStyle(CardPressStyle())
+            .gameNavigationSource(id: game.id, in: gameNavigationAnimation)
+            .opacity(cardsAppeared ? 1 : 0)
+            .offset(y: cardsAppeared ? 0 : 28)
+            .animation(.spring(response: 0.5, dampingFraction: 0.72).delay(Double(followedGames.count + index) * 0.09), value: cardsAppeared)
+            .transition(.scale(scale: 0.94).combined(with: .opacity))
+        }
+    }
+
+    private var footer: some View {
+        Text("✦ 以上就是婉婉的今日速报 ✦")
+            .font(.caption2).fontWeight(.semibold)
+            .foregroundStyle(Color.hoyoPink.opacity(0.45))
+            .frame(maxWidth: .infinity, alignment: .center)
+            .padding(.top, 4)
+    }
+
     // MARK: Helpers
 
+    private var stats: ActivityStats { ActivityStats(remoteEvents: service.events, customGames: customGames) }
+
     private func activeCount(for game: HoYoGame) -> Int {
-        service.events.filter { $0.game == game && $0.remaining > 0 && !$0.isDone }.count
+        stats.activeCount(for: game)
     }
 
     private func totalCount(for game: HoYoGame) -> Int {
-        service.events.filter { $0.game == game && $0.remaining > 0 }.count
+        stats.totalCount(for: game)
     }
 
     private func urgentEvent(for game: HoYoGame) -> RemoteEvent? {
@@ -755,7 +800,7 @@ struct GameCard: View {
                 .background(Color.hoyoCardBg)
             } else {
                 HStack {
-                    Text(totalCount == 0 ? "本轮暂且清闲，您可歇会儿 🎉" : "已全清，小的记下了！")
+                    Text(totalCount == 0 ? "这轮清空啦，老大歇会儿吧 🎉" : "全清啦，婉婉记下了！")
                         .font(.system(size: 13, weight: .bold))
                         .foregroundStyle(Color.hoyoNavy.opacity(0.40))
                         .padding(.vertical, 20)
@@ -998,7 +1043,7 @@ struct CustomGameCard: View {
                 .background(Color.hoyoCardBg)
             } else {
                 HStack {
-                    Text("暂无活动，小的先候着 🎉")
+                    Text("暂无活动，婉婉先待命 🎉")
                         .font(.system(size: 13, weight: .bold))
                         .foregroundStyle(Color.hoyoNavy.opacity(0.40))
                         .padding(.vertical, 20)
@@ -1029,5 +1074,234 @@ struct CustomGameCard: View {
             .offset(x: -10, y: -12)
         }
         .fontDesign(.rounded)
+    }
+}
+
+// MARK: - Wanwan Cheer
+
+// 婉婉举着账本轻轻摇摆；全部清完时冒出「全清啦！」，刚清完那一下还会蹦一下。点她会说话。
+// Shown behind the 今日速报 card on the home page, or at the bottom of the sidebar when unfolded.
+struct WanwanCheerView: View {
+    // The artwork is 600×356, cut flat along the bottom so it can stand on an edge.
+    static let aspectRatio: CGFloat = 356.0 / 600.0
+
+    let width: CGFloat
+    let stats: ActivityStats
+    let hasGames: Bool
+    let offline: Bool
+    let hopTrigger: Int
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var hopY: CGFloat = 0
+    @State private var swaying = false
+    @State private var speech = WanwanSpeech()
+    @State private var line: String?
+    @State private var hideTask: Task<Void, Never>?
+
+    private var cleared: Bool { stats.totalPending == 0 && stats.totalDone > 0 }
+
+    var body: some View {
+        Image("WanwanCheer")
+            .resizable()
+            .scaledToFit()
+            .frame(width: width)
+            .rotationEffect(.degrees(swaying ? 2.5 : -2.5), anchor: .bottom)
+            .offset(y: hopY)
+            // The artwork's top-left corner is empty, which leaves room for the badge.
+            .overlay(alignment: .topLeading) {
+                if cleared && line == nil {
+                    Text("全清啦！")
+                        .font(.system(size: 12, weight: .black))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 9)
+                        .padding(.vertical, 5)
+                        .background(Color.hoyoPink, in: Capsule())
+                        .overlay(Capsule().stroke(Color.hoyoNavy, lineWidth: 2))
+                        .offset(x: 2, y: 4)
+                        .transition(reduceMotion ? .opacity : .scale(scale: 0.4, anchor: .bottomTrailing).combined(with: .opacity))
+                }
+            }
+            // A zero-height anchor on her top edge; the bubble hangs above it, clear of the ledger.
+            .overlay(alignment: .top) {
+                Color.clear
+                    .frame(height: 0)
+                    .overlay(alignment: .bottom) {
+                        if let line {
+                            SpeechBubble(text: line)
+                                .frame(width: max(width, 190))
+                                .padding(.bottom, 12)
+                                .transition(reduceMotion ? .opacity : .scale(scale: 0.6, anchor: .bottom).combined(with: .opacity))
+                                .id(line)
+                        }
+                    }
+            }
+            .animation(reduceMotion ? .easeOut(duration: 0.15) : .spring(response: 0.4, dampingFraction: 0.6), value: cleared)
+            .animation(reduceMotion ? .easeOut(duration: 0.15) : .spring(response: 0.32, dampingFraction: 0.7), value: line)
+            .contentShape(Rectangle())
+            .onTapGesture { talk() }
+            .onAppear {
+                // Restart the loop each time she scrolls back on screen.
+                swaying = false
+                guard !reduceMotion else { return }
+                withAnimation(.easeInOut(duration: 1.6).repeatForever(autoreverses: true)) { swaying = true }
+            }
+            .onChange(of: hopTrigger) { hop() }
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("婉婉")
+            .accessibilityValue(line ?? "")
+            .accessibilityHint("轻点听婉婉说话")
+            .accessibilityAddTraits(.isButton)
+            .accessibilityAction { talk() }
+    }
+
+    private func talk() {
+        let next = speech.next(stats: stats, hasGames: hasGames, offline: offline)
+        line = next
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        AccessibilityNotification.Announcement(next).post()
+        hop()
+        hideTask?.cancel()
+        hideTask = Task { @MainActor in
+            try? await Task.sleep(for: .seconds(3))
+            guard !Task.isCancelled else { return }
+            line = nil
+        }
+    }
+
+    private func hop() {
+        guard !reduceMotion else { return }
+        withAnimation(.easeOut(duration: 0.14)) { hopY = -14 }
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(140))
+            withAnimation(.spring(response: 0.3, dampingFraction: 0.45)) { hopY = 0 }
+        }
+    }
+}
+
+// Pink cartoon bubble with a tail pointing down at Wanwan.
+private struct SpeechBubble: View {
+    let text: String
+
+    var body: some View {
+        ZStack(alignment: .bottom) {
+            Triangle()
+                .fill(Color.hoyoPink)
+                .overlay(Triangle().stroke(Color.hoyoNavy, lineWidth: 2))
+                .frame(width: 14, height: 9)
+                .offset(y: 7)
+            Text(text)
+                .font(.system(size: 13, weight: .black))
+                .foregroundStyle(.white)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(Color.hoyoPink, in: RoundedRectangle(cornerRadius: 14))
+                .overlay(RoundedRectangle(cornerRadius: 14).stroke(Color.hoyoNavy, lineWidth: 2))
+        }
+        .shadow(color: Color.hoyoNavy.opacity(0.22), radius: 0, x: 2, y: 2)
+    }
+
+    nonisolated private struct Triangle: Shape {
+        func path(in rect: CGRect) -> Path {
+            var path = Path()
+            path.move(to: CGPoint(x: rect.minX, y: rect.minY))
+            path.addLine(to: CGPoint(x: rect.maxX, y: rect.minY))
+            path.addLine(to: CGPoint(x: rect.midX, y: rect.maxY))
+            path.closeSubpath()
+            return path
+        }
+    }
+}
+
+// Picks what Wanwan says on each tap. The first tap after a pause leads with whatever matters
+// most right now; later taps mix in progress, time-of-day and small talk without repeating the
+// previous line, and quick repeated taps unlock a few easter eggs.
+struct WanwanSpeech {
+    private var lastLine: String?
+    private var lastTap: Date?
+    private var streak = 0
+
+    mutating func next(stats: ActivityStats, hasGames: Bool, offline: Bool, now: Date = Date()) -> String {
+        let quick = lastTap.map { now.timeIntervalSince($0) < 1.2 } ?? false
+        let freshStart = lastTap.map { now.timeIntervalSince($0) > 30 } ?? true
+        streak = quick ? streak + 1 : 1
+        lastTap = now
+
+        let line: String
+        if let egg = Self.easterEgg(streak: streak) {
+            line = egg
+        } else if freshStart, let lead = Self.headline(stats: stats, hasGames: hasGames, offline: offline, now: now) {
+            line = lead
+        } else {
+            let pool = Self.progressLines(stats: stats, hasGames: hasGames, offline: offline)
+                + Self.timeLines(now: now) + Self.smallTalk
+            line = pool.filter { $0 != lastLine }.randomElement() ?? Self.smallTalk[0]
+        }
+        lastLine = line
+        return line
+    }
+
+    // What to lead with: anything urgent, otherwise a greeting for the time of day.
+    private static func headline(stats: ActivityStats, hasGames: Bool, offline: Bool, now: Date) -> String? {
+        if !hasGames { return noGamesLine }
+        if let urgent = urgentLine(stats) { return urgent }
+        if offline { return offlineLine }
+        return timeLines(now: now).first
+    }
+
+    private static let noGamesLine = "老大还没告诉婉婉要盯哪个游戏呢！"
+    private static let offlineLine = "网络开小差了，婉婉先拿旧账本顶一下！"
+
+    private static func urgentLine(_ stats: ActivityStats) -> String? {
+        guard let event = stats.mostUrgent, event.remaining <= 86400 else { return nil }
+        let hours = Int(event.remaining / 3600)
+        let left = hours > 0 ? "只剩 \(hours) 小时了" : "不到 1 小时就结束了"
+        let title = event.title.count > 12 ? event.title.prefix(12) + "…" : event.title
+        return "老大！《\(event.gameName)》「\(title)」\(left)，冲！"
+    }
+
+    private static func progressLines(stats: ActivityStats, hasGames: Bool, offline: Bool) -> [String] {
+        guard hasGames else { return [noGamesLine] }
+        var lines: [String] = []
+        if let urgent = urgentLine(stats) { lines.append(urgent) }
+        if offline { lines.append(offlineLine) }
+        if stats.totalEndingSoon > 0 {
+            lines.append("这周有 \(stats.totalEndingSoon) 个活动要结束，婉婉都记在账本上了！")
+        }
+        if stats.totalPending > 0 {
+            lines.append("还有 \(stats.totalPending) 个活动没做完，老大加油！")
+        } else if stats.totalDone > 0 {
+            lines += ["全清啦！老大今天超厉害！", "账本上全打勾了，可以安心摸鱼啦！"]
+        }
+        return lines
+    }
+
+    private static func timeLines(now: Date) -> [String] {
+        switch Calendar.current.component(.hour, from: now) {
+        case 6..<11:  return ["早上好老大！今天的体力别忘了清！"]
+        case 11..<14: return ["午饭吃了吗？吃完再上线也不迟！"]
+        case 18..<23: return ["晚上好老大，日常做完了吗？"]
+        case 23..<24, 0..<5: return ["老大太晚啦，清完这波体力赶紧睡吧！", "再熬夜婉婉要没收你的手机了！"]
+        default: return []
+        }
+    }
+
+    private static let smallTalk = [
+        "婉婉的账本一笔都不会记错！",
+        "戳我干嘛，是想看账本吗？",
+        "树脂、开拓力、电量，该清的都清了吗？",
+        "抽卡前先看看活动奖励，别白白错过！",
+        "婉婉一直在帮你盯着呢！",
+        "今天也要做一个不错过活动的老大！",
+    ]
+
+    private static func easterEgg(streak: Int) -> String? {
+        switch streak {
+        case 3:  return "嘿嘿，再戳就痒啦！"
+        case 5:  return "别戳啦老大，账本要掉了！"
+        case 10: return "……婉婉生气了！（才没有）"
+        default: return nil
+        }
     }
 }

@@ -112,11 +112,17 @@ final class NotificationManager {
                     guard fireDate > now else { continue }
 
                     let content = UNMutableNotificationContent()
-                    content.title = "小的急报：活动将尽"
-                    content.body = "《\(act.gameName)》「\(act.title)」还有 \(mark) 小时结束，小的提醒您尽快收尾。"
+                    if let late = Self.lateNightCopy(at: fireDate, gameName: act.gameName, title: act.title,
+                                                     remaining: "\(mark) 小时", variant: idx + mark, calendar: cal) {
+                        content.title = late.title
+                        content.body = late.body
+                    } else {
+                        content.title = "婉婉急报：活动快结束了"
+                        content.body = "《\(act.gameName)》「\(act.title)」还有 \(mark) 小时结束，老大抓紧收尾！"
+                    }
                     content.sound = .default
 
-                    let comps = cal.dateComponents([.year, .month, .day, .hour, .minute], from: fireDate)
+                    let comps = cal.dateComponents([.year, .month, .day, .hour, .minute, .second], from: fireDate)
                     let trigger = UNCalendarNotificationTrigger(dateMatching: comps, repeats: false)
                     finalRequests.append(
                         UNNotificationRequest(identifier: "act_final_\(act.uid)_\(mark)",
@@ -146,8 +152,14 @@ final class NotificationManager {
                     let timeText = days > 0 ? "\(days) 天 \(hours) 小时" : "\(hours) 小时"
 
                     let content = UNMutableNotificationContent()
-                    content.title = "小的禀报：活动将到期"
-                    content.body = "《\(act.gameName)》「\(act.title)」还有 \(timeText)结束，小的已为您记着。"
+                    if let late = Self.lateNightCopy(at: baseFireDate, gameName: act.gameName, title: act.title,
+                                                     remaining: timeText, variant: idx + dayOffset, calendar: cal) {
+                        content.title = late.title
+                        content.body = late.body
+                    } else {
+                        content.title = "婉婉提醒：活动快到期了"
+                        content.body = "《\(act.gameName)》「\(act.title)」还有 \(timeText)结束，婉婉帮你记着呢。"
+                    }
                     content.sound = .default
 
                     let trigComps = cal.dateComponents(
@@ -231,8 +243,8 @@ final class NotificationManager {
 
     func scheduleTestNotification() async throws {
         let content = UNMutableNotificationContent()
-        content.title = "小的试铃"
-        content.body = "小的能准时禀报了，这条通知说明系统推送正常。"
+        content.title = "婉婉试铃"
+        content.body = "婉婉能准时提醒你啦，这条通知说明推送正常。"
         content.sound = .default
         let trigger = UNTimeIntervalNotificationTrigger(timeInterval: 5, repeats: false)
         try await UNUserNotificationCenter.current().add(
@@ -244,6 +256,22 @@ final class NotificationManager {
     }
 
     // MARK: - Private helpers
+
+    // Reminders that land between 23:00 and 5:00 drop the formal tone and nudge the player to
+    // finish up and go to sleep. `variant` rotates the lines so a busy night doesn't repeat one.
+    private static func lateNightCopy(
+        at date: Date, gameName: String, title: String, remaining: String, variant: Int, calendar: Calendar
+    ) -> (title: String, body: String)? {
+        let hour = calendar.component(.hour, from: date)
+        guard hour >= 23 || hour < 5 else { return nil }
+        let lines: [(String, String)] = [
+            ("老大太晚啦", "《\(gameName)》「\(title)」还剩 \(remaining)，清完这波体力赶紧睡吧！"),
+            ("老大，今晚的还没做", "《\(gameName)》「\(title)」今晚还没做，还剩 \(remaining)，做完就去睡！"),
+            ("夜深啦老大", "《\(gameName)》「\(title)」还剩 \(remaining)就结束了，速战速决，别熬太晚哦。"),
+        ]
+        let line = lines[abs(variant) % lines.count]
+        return (line.0, line.1)
+    }
 
     private func triggerDate(of request: UNNotificationRequest) -> Date? {
         switch request.trigger {

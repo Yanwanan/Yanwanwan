@@ -79,6 +79,8 @@ private struct CountdownPill: View {
                 .font(.system(size: 9, weight: .bold))
             Text(text)
                 .font(.system(size: 11, weight: .black))
+                .contentTransition(.numericText())
+                .animation(.easeInOut(duration: 0.28), value: text)
         }
         .foregroundStyle(level >= 2 ? .white : Color.hoyoNavy)
         .padding(.horizontal, 8)
@@ -224,7 +226,7 @@ struct EventCountdownWidget: Widget {
                     )
                 }
         }
-        .configurationDisplayName("活动倒计时")
+        .configurationDisplayName("二游活动小灵通倒计时")
         .description("显示最近即将结束的米哈游游戏活动。")
         .supportedFamilies([.systemSmall, .systemMedium])
     }

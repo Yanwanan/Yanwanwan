@@ -2,21 +2,23 @@ import SwiftUI
 
 struct SplashView: View {
     let onDismiss: @MainActor @Sendable () -> Void
-    var body: some View { SplashDoorView(onDismiss: onDismiss) }
+    var body: some View { SplashWanwanView(onDismiss: onDismiss) }
 }
 
-// MARK: - 老板突然推门
+// MARK: - 婉婉探头
 
-private struct SplashDoorView: View { // still private — only SplashView uses it
+private struct SplashWanwanView: View { // still private — only SplashView uses it
     let onDismiss: @MainActor @Sendable () -> Void
 
-    @State private var doorX:       CGFloat = -420
-    @State private var eyesShowing  = false
-    @State private var shakeX:      CGFloat = 0
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var headX:       CGFloat = -420
+    @State private var greeting     = false
+    @State private var swaying      = false
+    @State private var hopY:        CGFloat = 0
     @State private var rootOpacity: Double  = 1
     @State private var floatY:      CGFloat = 0
 
-    private let slackTexts = ["候着中…", "清点活动中", "翻公告中", "守着兑换码", "等您吩咐中"]
+    private let slackTexts = ["婉婉加载中…", "清点活动中", "翻公告中", "整理待办中", "等老大吩咐中"]
 
     var body: some View {
         ZStack {
@@ -33,45 +35,14 @@ private struct SplashDoorView: View { // still private — only SplashView uses 
             }
             .offset(y: floatY)
 
-            // 门体
-            ZStack {
-                // 门板
-                RoundedRectangle(cornerRadius: 10)
-                    .fill(Color(hex: "8B5E3C"))
-                    .frame(width: 130, height: 210)
+            // 婉婉的像素大头：白色贴纸描边 + 卡通投影，从左边冲进来后左右摆头
+            wanwanHead
+                .frame(width: 190, height: 190)
+                .rotationEffect(.degrees(swaying ? 7 : -7), anchor: .bottom)
+                .offset(x: headX, y: hopY)
 
-                // 门框线条
-                RoundedRectangle(cornerRadius: 8)
-                    .stroke(Color(hex: "5C3A1E"), lineWidth: 5)
-                    .frame(width: 118, height: 198)
-
-                // 门板中线
-                Rectangle()
-                    .fill(Color(hex: "5C3A1E").opacity(0.5))
-                    .frame(width: 3, height: 200)
-
-                // 门把手
-                Circle()
-                    .fill(Color.hoyoYellow)
-                    .frame(width: 14, height: 14)
-                    .shadow(color: .yellow.opacity(0.5), radius: 4)
-                    .offset(x: 44, y: 0)
-
-                // 眼睛
-                if eyesShowing {
-                    HStack(spacing: 14) {
-                        eyeView
-                        eyeView
-                    }
-                    .offset(y: -55)
-                    .transition(.scale.combined(with: .opacity))
-                }
-            }
-            .offset(x: doorX + shakeX)
-
-            // 皇上来了！提示（配合震动）
-            if eyesShowing {
-                Text("👀  主子驾到，小的候着！")
+            if greeting {
+                Text("👀  老大来啦，婉婉在呢！")
                     .font(.headline).fontWeight(.black)
                     .foregroundStyle(Color.hoyoPink)
                     .offset(y: 160)
@@ -80,26 +51,28 @@ private struct SplashDoorView: View { // still private — only SplashView uses 
         }
         .opacity(rootOpacity)
         .onAppear {
-            // 摸鱼字漂浮
-            withAnimation(.easeInOut(duration: 2.5).repeatForever(autoreverses: true)) {
-                floatY = 18
+            if !reduceMotion {
+                // 摸鱼字漂浮
+                withAnimation(.easeInOut(duration: 2.5).repeatForever(autoreverses: true)) {
+                    floatY = 18
+                }
             }
 
-            // 门从左边冲进来
+            // 婉婉从左边冲进来
             after(0.4) {
-                withAnimation(.spring(response: 0.45, dampingFraction: 0.58)) { doorX = 0 }
+                withAnimation(reduceMotion ? .easeOut(duration: 0.2) : .spring(response: 0.45, dampingFraction: 0.58)) {
+                    headX = 0
+                }
                 UIImpactFeedbackGenerator(style: .heavy).impactOccurred()
             }
 
-            // 眼睛出现
+            // 打招呼：开始摆头，蹦一下
             after(1.0) {
-                withAnimation(.spring(response: 0.3, dampingFraction: 0.6)) { eyesShowing = true }
-            }
-
-            // 屏幕震动
-            after(1.25) {
-                UINotificationFeedbackGenerator().notificationOccurred(.warning)
-                shake()
+                withAnimation(.spring(response: 0.3, dampingFraction: 0.6)) { greeting = true }
+                guard !reduceMotion else { return }
+                withAnimation(.easeInOut(duration: 0.55).repeatForever(autoreverses: true)) { swaying = true }
+                UINotificationFeedbackGenerator().notificationOccurred(.success)
+                hop()
             }
 
             // 退出
@@ -110,29 +83,33 @@ private struct SplashDoorView: View { // still private — only SplashView uses 
         }
     }
 
-    private var eyeView: some View {
-        ZStack {
-            Ellipse()
-                .fill(.white)
-                .frame(width: 26, height: 20)
-                .shadow(color: .black.opacity(0.15), radius: 2)
-            Circle()
-                .fill(Color.black)
-                .frame(width: 11, height: 11)
-            // 高光
-            Circle()
-                .fill(.white)
-                .frame(width: 4, height: 4)
-                .offset(x: 3, y: -3)
+    private var wanwanHead: some View {
+        let outline: [CGSize] = [
+            .init(width: -4, height: 0), .init(width: 4, height: 0), .init(width: 0, height: -4), .init(width: 0, height: 4),
+            .init(width: -3, height: -3), .init(width: 3, height: -3), .init(width: -3, height: 3), .init(width: 3, height: 3),
+        ]
+        return ZStack {
+            ForEach(outline.indices, id: \.self) { i in
+                Image("WanwanHead")
+                    .renderingMode(.template)
+                    .resizable()
+                    .scaledToFit()
+                    .foregroundStyle(.white)
+                    .offset(outline[i])
+            }
+            Image("WanwanHead")
+                .resizable()
+                .scaledToFit()
         }
+        .compositingGroup()
+        .shadow(color: Color.hoyoNavy.opacity(0.22), radius: 0, x: 3, y: 3)
+        .accessibilityLabel("婉婉")
     }
 
-    private func shake() {
-        let steps: [(CGFloat, Double)] = [(10,0), (-10,0.06), (8,0.12), (-8,0.18), (4,0.24), (-4,0.30), (0,0.36)]
-        for (offset, delay) in steps {
-            after(delay) {
-                withAnimation(.linear(duration: 0.05)) { shakeX = offset }
-            }
+    private func hop() {
+        withAnimation(.easeOut(duration: 0.14)) { hopY = -16 }
+        after(0.14) {
+            withAnimation(.spring(response: 0.3, dampingFraction: 0.45)) { hopY = 0 }
         }
     }
 }

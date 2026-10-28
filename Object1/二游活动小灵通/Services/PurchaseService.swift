@@ -2,47 +2,17 @@ import Foundation
 import Observation
 import StoreKit
 
-#if DEBUG
-enum DebugEntitlementOverride: String, Identifiable {
-    case live
-    case free
-    case premium
-
-    var id: String { rawValue }
-
-    var displayName: String {
-        switch self {
-        case .live:    return "未覆盖"
-        case .free:    return "免费版"
-        case .premium: return "会员"
-        }
-    }
-
-    var forcedTier: EntitlementTier? {
-        switch self {
-        case .live:    return nil
-        case .free:    return .free
-        case .premium: return .premium
-        }
-    }
-}
-#endif
-
 @MainActor
 @Observable
 final class PurchaseService {
     static let premiumProductID = "ailesson.path.Object1.premium.monthly"
+    static let lifetimeProductID = "ailesson.path.Object1.premium.lifetime"
+    private static let premiumProductIDs = [premiumProductID, lifetimeProductID]
 
     var tier: EntitlementTier = .free
     var products: [Product] = []
     var isLoadingProducts = false
     var errorMessage: String? = nil
-
-    #if DEBUG
-    var debugEntitlementOverride: DebugEntitlementOverride = .live {
-        didSet { applyEffectiveTier() }
-    }
-    #endif
 
     private var storeKitTier: EntitlementTier = .free
     private var didStart = false
@@ -50,6 +20,10 @@ final class PurchaseService {
 
     var premiumProduct: Product? {
         products.first { $0.id == Self.premiumProductID }
+    }
+
+    var lifetimeProduct: Product? {
+        products.first { $0.id == Self.lifetimeProductID }
     }
 
     var isPremium: Bool { tier == .premium }
@@ -79,10 +53,15 @@ final class PurchaseService {
         defer { isLoadingProducts = false }
 
         do {
-            products = try await Product.products(for: [Self.premiumProductID])
-                .sorted { $0.displayName < $1.displayName }
+            products = try await Product.products(for: Self.premiumProductIDs)
+                .sorted { lhs, rhs in
+                    let lhsIndex = Self.premiumProductIDs.firstIndex(of: lhs.id) ?? .max
+                    let rhsIndex = Self.premiumProductIDs.firstIndex(of: rhs.id) ?? .max
+                    if lhsIndex != rhsIndex { return lhsIndex < rhsIndex }
+                    return lhs.displayName < rhs.displayName
+                }
         } catch {
-            errorMessage = "会员商品加载失败：\(error.localizedDescription)"
+            errorMessage = "会员商品加载失败：请检查网络或稍后再试"
         }
     }
 
@@ -97,6 +76,25 @@ final class PurchaseService {
             return false
         }
 
+        return await purchase(product)
+    }
+
+    @discardableResult
+    func purchaseLifetime() async -> Bool {
+        if lifetimeProduct == nil {
+            await loadProducts()
+        }
+
+        guard let product = lifetimeProduct else {
+            errorMessage = "一休尼会员商品暂不可用，请稍后再试"
+            return false
+        }
+
+        return await purchase(product)
+    }
+
+    @discardableResult
+    func purchase(_ product: Product) async -> Bool {
         do {
             let result = try await product.purchase()
             switch result {
@@ -111,7 +109,7 @@ final class PurchaseService {
                 return false
             }
         } catch {
-            errorMessage = "购买失败：\(error.localizedDescription)"
+            errorMessage = "购买失败：请确认网络和 App Store 账户状态后重试"
             return false
         }
     }
@@ -121,7 +119,7 @@ final class PurchaseService {
             try await AppStore.sync()
             await refreshEntitlements()
         } catch {
-            errorMessage = "恢复购买失败：\(error.localizedDescription)"
+            errorMessage = "恢复购买失败：请确认网络和 App Store 账户状态后重试"
         }
     }
 
@@ -130,7 +128,7 @@ final class PurchaseService {
 
         for await result in Transaction.currentEntitlements {
             guard let transaction = try? checkVerified(result) else { continue }
-            guard transaction.productID == Self.premiumProductID else { continue }
+            guard Self.premiumProductIDs.contains(transaction.productID) else { continue }
             guard transaction.revocationDate == nil else { continue }
             hasPremium = true
         }
@@ -139,14 +137,18 @@ final class PurchaseService {
         applyEffectiveTier()
     }
 
-    private func applyEffectiveTier() {
-        #if DEBUG
-        if let forcedTier = debugEntitlementOverride.forcedTier {
-            tier = forcedTier
-            return
+    func currentEntitlementJWS() async -> String? {
+        for await result in Transaction.currentEntitlements {
+            guard let transaction = try? checkVerified(result) else { continue }
+            guard Self.premiumProductIDs.contains(transaction.productID) else { continue }
+            guard transaction.revocationDate == nil else { continue }
+            return result.jwsRepresentation
         }
-        #endif
 
+        return nil
+    }
+
+    private func applyEffectiveTier() {
         tier = storeKitTier
     }
 

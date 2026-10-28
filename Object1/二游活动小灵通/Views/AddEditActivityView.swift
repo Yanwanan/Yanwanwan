@@ -3,6 +3,23 @@ import SwiftData
 import UIKit
 import UserNotifications
 
+nonisolated private struct HorizontalSliceShape: Shape {
+    let index: Int
+    let count: Int
+
+    func path(in rect: CGRect) -> Path {
+        let sliceHeight = rect.height / CGFloat(count)
+        return Path(
+            CGRect(
+                x: rect.minX,
+                y: rect.minY + CGFloat(index) * sliceHeight,
+                width: rect.width,
+                height: sliceHeight
+            )
+        )
+    }
+}
+
 // Settings page: game selection + notification lead time.
 struct SettingsView: View {
     @Query private var prefsQuery: [UserPreferences]
@@ -10,12 +27,10 @@ struct SettingsView: View {
     private var prefs: UserPreferences? { prefsQuery.first }
 
     var body: some View {
-        NavigationStack {
-            if let prefs {
-                SettingsFormView(prefs: prefs)
-            } else {
-                ProgressView()
-            }
+        if let prefs {
+            SettingsFormView(prefs: prefs)
+        } else {
+            ProgressView()
         }
     }
 }
@@ -23,18 +38,22 @@ struct SettingsView: View {
 // Separate sub-view so @Bindable works on the @Model object.
 private struct SettingsFormView: View {
     @Bindable var prefs: UserPreferences
+    @Environment(\.isWideLayout) private var isWide
 
     @Environment(\.openURL)      private var openURL
     @Environment(\.modelContext) private var modelContext
+    @Environment(\.scenePhase)   private var scenePhase
     @Environment(PurchaseService.self) private var purchaseService
     @Query private var customGames: [CustomGame]
     @State private var showAISearch  = false
     @State private var showPremium   = false
     @State private var addLimitMessage: String? = nil
+    @State private var deleteErrorMessage: String? = nil
+    @State private var deletingGameID: String? = nil
+    @State private var deleteFragmentsSeparated = false
+    @State private var addSuccessVisible = false
+    @State private var previousCustomGameCount = 0
     @State private var notifStatus: UNAuthorizationStatus = .notDetermined
-    #if DEBUG
-    @State private var didResetDebugQuota = false
-    #endif
 
     var body: some View {
         ZStack {
@@ -45,31 +64,19 @@ private struct SettingsFormView: View {
                     // Settings header card
                     settingsHeaderCard
 
-                    // 会员权益
-                    sectionLabel(icon: "crown.fill", iconColor: Color.hoyoYellow, title: "会员权益")
-                    membershipCard
-                    #if DEBUG
-                    debugEntitlementCard
-                    #endif
-
-                    // 关注的游戏
-                    sectionLabel(icon: "bookmark.fill", iconColor: Color.hoyoPink, title: "关注的游戏")
-                    followedGamesCard
-
-                    // 自定义游戏
-                    sectionLabel(icon: "shippingbox.fill", iconColor: Color(hex: "E8895A"), title: "自定义游戏")
-                    addGameButton
-
-                    // 提醒设置
-                    sectionLabel(icon: "bell.badge.fill", iconColor: Color.hoyoPink, title: "提醒设置")
-                    notificationCard
+                    // Stacked on phones; account and app sections side by side when the Duo unfolds.
+                    AdaptiveTwoColumn {
+                        VStack(spacing: 20) { accountSections }
+                    } trailing: {
+                        VStack(spacing: 20) { appSections }
+                    }
 
                     Text("此 App 使用社区第三方 API 获取活动数据，与米哈游官方无关。")
                         .font(.caption2)
                         .foregroundStyle(Color.hoyoNavy.opacity(0.30))
                         .multilineTextAlignment(.center)
                         .padding(.horizontal, 20)
-                        .padding(.bottom, 100)
+                        .padding(.bottom, isWide ? 24 : 100)
                 }
                 .padding(.horizontal, 16)
                 .padding(.top, 16)
@@ -77,6 +84,17 @@ private struct SettingsFormView: View {
         }
         .fontDesign(.rounded)
         .sheet(isPresented: $showAISearch) { AIGameSearchView() }
+        .onAppear { previousCustomGameCount = customGames.count }
+        .onChange(of: customGames.count) { oldCount, newCount in
+            previousCustomGameCount = newCount
+            guard newCount > oldCount else { return }
+            addSuccessVisible = true
+            UINotificationFeedbackGenerator().notificationOccurred(.success)
+            Task { @MainActor in
+                try? await Task.sleep(for: .milliseconds(850))
+                withAnimation(.easeOut(duration: 0.2)) { addSuccessVisible = false }
+            }
+        }
         .sheet(isPresented: $showPremium) { PremiumView() }
         .alert("自定义游戏已达上限", isPresented: Binding(
             get: { addLimitMessage != nil },
@@ -92,14 +110,74 @@ private struct SettingsFormView: View {
         } message: {
             Text(addLimitMessage ?? "")
         }
-        #if DEBUG
-        .alert("已重置提取次数", isPresented: $didResetDebugQuota) {
+        .alert("删除失败", isPresented: Binding(
+            get: { deleteErrorMessage != nil },
+            set: { if !$0 { deleteErrorMessage = nil } }
+        )) {
             Button("知道了", role: .cancel) {}
         } message: {
-            Text("已刷新本机测试标识，后端会按新的设备记录重新计算今日提取次数。")
+            Text(deleteErrorMessage ?? "")
         }
-        #endif
         .onAppear { refreshNotifStatus() }
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active { refreshNotifStatus() }
+        }
+    }
+
+    // 会员、关注的游戏、自定义游戏：账号和游戏相关
+    @ViewBuilder
+    private var accountSections: some View {
+        sectionLabel(icon: "crown.fill", iconColor: Color.hoyoYellow, title: "会员权益")
+        membershipCard
+
+        sectionLabel(icon: "bookmark.fill", iconColor: Color.hoyoPink, title: "关注的游戏")
+        followedGamesCard
+
+        sectionLabel(icon: "shippingbox.fill", iconColor: Color(hex: "E8895A"), title: "自定义游戏")
+        addGameButton
+    }
+
+    // 提醒设置、隐私与合规：App 行为相关
+    @ViewBuilder
+    private var appSections: some View {
+        sectionLabel(icon: "bell.badge.fill", iconColor: Color.hoyoPink, title: "提醒设置")
+        notificationCard
+
+        sectionLabel(icon: "hand.raised.fill", iconColor: Color(hex: "4A72C4"), title: "隐私与合规")
+        complianceCard
+    }
+
+    private var complianceCard: some View {
+        NavigationLink {
+            ComplianceCenterView()
+        } label: {
+            HStack(spacing: 12) {
+                Image(systemName: "checkmark.shield.fill")
+                    .font(.system(size: 17, weight: .bold))
+                    .foregroundStyle(.white)
+                    .frame(width: 40, height: 40)
+                    .background(Color(hex: "4A72C4"), in: RoundedRectangle(cornerRadius: 11))
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("隐私与合规中心")
+                        .font(.system(size: 15, weight: .bold))
+                        .foregroundStyle(Color.hoyoNavy)
+                    Text("政策、AI 公示、备案信息与数据管理")
+                        .font(.caption)
+                        .foregroundStyle(Color.hoyoNavy.opacity(0.45))
+                }
+                Spacer()
+                Image(systemName: "chevron.right")
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(Color.hoyoNavy.opacity(0.25))
+            }
+            .padding(16)
+            .background(Color.hoyoCardBg, in: RoundedRectangle(cornerRadius: 18))
+            .overlay(
+                RoundedRectangle(cornerRadius: 18)
+                    .stroke(Color.hoyoNavy.opacity(0.10), lineWidth: 1.5)
+            )
+        }
+        .buttonStyle(.plain)
     }
 
     // MARK: - Settings Header Card
@@ -118,10 +196,10 @@ private struct SettingsFormView: View {
                     )
 
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("内务设置")
+                    Text("设置")
                         .font(.system(size: 20, weight: .black))
                         .foregroundStyle(.white)
-                    Text("小的按您的规矩办")
+                    Text("婉婉按你的习惯来")
                         .font(.system(size: 10, weight: .semibold))
                         .foregroundStyle(.white.opacity(0.75))
                         .kerning(0.8)
@@ -194,73 +272,6 @@ private struct SettingsFormView: View {
         .shadow(color: Color.hoyoNavy.opacity(0.06), radius: 10, x: 0, y: 3)
     }
 
-    #if DEBUG
-    private var debugEntitlementCard: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(spacing: 10) {
-                Image(systemName: "hammer.fill")
-                    .font(.system(size: 14, weight: .black))
-                    .foregroundStyle(.white)
-                    .frame(width: 30, height: 30)
-                    .background(Color.hoyoNavy, in: RoundedRectangle(cornerRadius: 8))
-
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Debug 测试身份")
-                        .font(.system(size: 14, weight: .black, design: .rounded))
-                        .foregroundStyle(Color.hoyoNavy)
-                    Text("当前：\(purchaseService.tier.displayName)")
-                        .font(.caption2)
-                        .foregroundStyle(Color.hoyoNavy.opacity(0.45))
-                }
-                Spacer()
-            }
-
-            HStack(spacing: 8) {
-                Button {
-                    InstallID.resetForDebug()
-                    didResetDebugQuota = true
-                } label: {
-                    Text("重置次数")
-                        .font(.system(size: 13, weight: .black, design: .rounded))
-                        .foregroundStyle(Color.hoyoNavy)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 9)
-                        .background(Color.hoyoNavy.opacity(0.07), in: RoundedRectangle(cornerRadius: 10))
-                }
-                .buttonStyle(.plain)
-
-                debugEntitlementButton(.free)
-                debugEntitlementButton(.premium)
-            }
-        }
-        .padding(14)
-        .background(Color.hoyoCardBg, in: RoundedRectangle(cornerRadius: 16))
-        .overlay(
-            RoundedRectangle(cornerRadius: 16)
-                .stroke(Color.hoyoNavy.opacity(0.10), lineWidth: 1.5)
-        )
-    }
-
-    private func debugEntitlementButton(_ mode: DebugEntitlementOverride) -> some View {
-        Button {
-            purchaseService.debugEntitlementOverride = mode
-        } label: {
-            Text(mode.displayName)
-                .font(.system(size: 13, weight: .black, design: .rounded))
-                .foregroundStyle(purchaseService.debugEntitlementOverride == mode ? .white : Color.hoyoNavy)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 9)
-                .background(
-                    purchaseService.debugEntitlementOverride == mode
-                    ? Color.hoyoPink
-                    : Color.hoyoNavy.opacity(0.07),
-                    in: RoundedRectangle(cornerRadius: 10)
-                )
-        }
-        .buttonStyle(.plain)
-    }
-    #endif
-
     // MARK: - Section Label
 
     @ViewBuilder
@@ -288,7 +299,6 @@ private struct SettingsFormView: View {
                     Rectangle()
                         .fill(Color.hoyoNavy.opacity(0.06))
                         .frame(height: 1)
-                        .padding(.horizontal, 16)
                         .overlay(
                             HStack(spacing: 4) {
                                 ForEach(0..<30, id: \.self) { _ in
@@ -298,8 +308,10 @@ private struct SettingsFormView: View {
                                     Spacer().frame(width: 4)
                                 }
                             }
-                            .clipped()
                         )
+                        // The dashes are wider than the card; clip them to the divider's own width.
+                        .clipped()
+                        .padding(.horizontal, 16)
                 }
                 HStack(spacing: 12) {
                     Text(game.emoji)
@@ -380,41 +392,8 @@ private struct SettingsFormView: View {
             VStack(spacing: 0) {
                 ForEach(Array(customGames.enumerated()), id: \.element.id) { idx, game in
                     if idx > 0 { Divider().padding(.horizontal, 16) }
-                    HStack(spacing: 12) {
-                        Text(game.emoji)
-                            .font(.system(size: 22))
-                            .frame(width: 44, height: 44)
-                            .background(
-                                RoundedRectangle(cornerRadius: 12)
-                                    .fill(game.accentColor.opacity(0.15))
-                            )
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(game.name)
-                                .font(.system(size: 15, weight: .semibold))
-                                .foregroundStyle(Color.hoyoNavy)
-                            Text("\(game.activeEvents.count) 个进行中")
-                                .font(.caption)
-                                .foregroundStyle(Color.hoyoNavy.opacity(0.40))
-                        }
-                        Spacer()
-                        Button(role: .destructive) {
-                            modelContext.delete(game)
-                            try? modelContext.save()
-                            NotificationManager.shared.rescheduleAll()
-                        } label: {
-                            ZStack {
-                                Circle()
-                                    .stroke(Color.hoyoNavy.opacity(0.20), lineWidth: 1.5)
-                                    .frame(width: 28, height: 28)
-                                Image(systemName: "xmark")
-                                    .font(.system(size: 10, weight: .bold))
-                                    .foregroundStyle(Color.hoyoNavy.opacity(0.40))
-                            }
-                        }
-                        .buttonStyle(.plain)
-                    }
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 12)
+                    deletableCustomGameRow(game)
+                    .transition(.move(edge: .leading).combined(with: .opacity))
                 }
             }
             .background(Color.hoyoCardBg, in: RoundedRectangle(cornerRadius: 18))
@@ -424,6 +403,70 @@ private struct SettingsFormView: View {
             )
             .shadow(color: Color.hoyoNavy.opacity(0.06), radius: 10, x: 0, y: 3)
         }
+    }
+
+    private func customGameRowContent(_ game: CustomGame) -> some View {
+        HStack(spacing: 12) {
+            Text(game.emoji)
+                .font(.system(size: 22))
+                .frame(width: 44, height: 44)
+                .background(
+                    RoundedRectangle(cornerRadius: 12)
+                        .fill(game.accentColor.opacity(0.15))
+                )
+            VStack(alignment: .leading, spacing: 2) {
+                Text(game.name)
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(Color.hoyoNavy)
+                Text("\(game.activeEvents.count) 个进行中")
+                    .font(.caption)
+                    .foregroundStyle(Color.hoyoNavy.opacity(0.40))
+            }
+            Spacer()
+            Button(role: .destructive) {
+                animateDelete(game)
+            } label: {
+                ZStack {
+                    Circle()
+                        .stroke(Color.hoyoNavy.opacity(0.20), lineWidth: 1.5)
+                        .frame(width: 28, height: 28)
+                    Image(systemName: "xmark")
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(Color.hoyoNavy.opacity(0.40))
+                }
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+    }
+
+    private func deletableCustomGameRow(_ game: CustomGame) -> some View {
+        let isDeleting = deletingGameID == game.id
+        let xOffsets: [CGFloat] = [-34, 20, -28]
+        let yOffsets: [CGFloat] = [-5, 1, 6]
+        let rotations: [Double] = [-2.0, 1.2, -1.4]
+
+        return ZStack {
+            customGameRowContent(game)
+                .opacity(isDeleting ? 0 : 1)
+
+            if isDeleting {
+                ForEach(0..<3, id: \.self) { slice in
+                    customGameRowContent(game)
+                        .clipShape(HorizontalSliceShape(index: slice, count: 3))
+                        .offset(
+                            x: deleteFragmentsSeparated ? xOffsets[slice] : 0,
+                            y: deleteFragmentsSeparated ? yOffsets[slice] : 0
+                        )
+                        .rotationEffect(.degrees(deleteFragmentsSeparated ? rotations[slice] : 0))
+                        .scaleEffect(deleteFragmentsSeparated ? 0.94 : 1)
+                        .opacity(deleteFragmentsSeparated ? 0 : 1)
+                        .allowsHitTesting(false)
+                }
+            }
+        }
+        .animation(.easeOut(duration: 0.34), value: deleteFragmentsSeparated)
     }
 
     // MARK: - Add Game Button
@@ -440,9 +483,11 @@ private struct SettingsFormView: View {
                         Circle()
                             .fill(.white.opacity(0.30))
                             .frame(width: 32, height: 32)
-                        Image(systemName: "plus")
+                        Image(systemName: addSuccessVisible ? "checkmark" : "plus")
                             .font(.system(size: 14, weight: .black))
                             .foregroundStyle(.white)
+                            .contentTransition(.symbolEffect(.replace))
+                            .rotationEffect(.degrees(addSuccessVisible ? 360 : 0))
                     }
                     Text("添加要盯的游戏")
                         .font(.system(size: 16, weight: .black))
@@ -469,7 +514,7 @@ private struct SettingsFormView: View {
             }
             .buttonStyle(.plain)
 
-            Text("小的可联网帮您整理自定义游戏活动")
+            Text("婉婉可以联网帮你整理自定义游戏的活动")
                 .font(.caption2)
                 .foregroundStyle(Color.hoyoNavy.opacity(0.35))
         }
@@ -483,6 +528,30 @@ private struct SettingsFormView: View {
         showAISearch = true
     }
 
+    private func animateDelete(_ game: CustomGame) {
+        guard deletingGameID == nil else { return }
+        deletingGameID = game.id
+        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+        Task { @MainActor in
+            await Task.yield()
+            withAnimation(.easeOut(duration: 0.34)) {
+                deleteFragmentsSeparated = true
+            }
+            try? await Task.sleep(for: .milliseconds(360))
+            modelContext.delete(game)
+            do {
+                try modelContext.save()
+                deleteErrorMessage = nil
+                NotificationManager.shared.rescheduleAll()
+            } catch {
+                modelContext.rollback()
+                deleteErrorMessage = "删除失败：\(error.localizedDescription)"
+            }
+            deleteFragmentsSeparated = false
+            deletingGameID = nil
+        }
+    }
+
     // MARK: - Notification Card
 
     private var notificationCard: some View {
@@ -490,7 +559,7 @@ private struct SettingsFormView: View {
 
             // ── Row 1: Daily reminder toggle ──────────────────────────
             HStack(alignment: .top, spacing: 12) {
-                Image(systemName: "bell.badge.fill")
+                Image(systemName: prefs.dailyReminderEnabled ? "bell.badge.fill" : "bell.slash.fill")
                     .font(.system(size: 14, weight: .bold))
                     .foregroundStyle(.white)
                     .frame(width: 30, height: 30)
@@ -498,9 +567,12 @@ private struct SettingsFormView: View {
                         prefs.dailyReminderEnabled ? Color.hoyoPink : Color.hoyoNavy.opacity(0.30),
                         in: RoundedRectangle(cornerRadius: 8)
                     )
+                    .contentTransition(.symbolEffect(.replace))
+                    .symbolEffect(.bounce, value: prefs.dailyReminderEnabled)
+                    .rotationEffect(.degrees(prefs.dailyReminderEnabled ? -5 : 0))
 
                 VStack(alignment: .leading, spacing: 3) {
-                    Text("每日禀报")
+                    Text("每日提醒")
                         .font(.system(size: 15, weight: .semibold))
                         .foregroundStyle(Color.hoyoNavy)
                     Text("每天在您选择的时间提醒临期活动")
@@ -525,7 +597,7 @@ private struct SettingsFormView: View {
                 Divider().padding(.horizontal, 16)
                 HStack {
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("禀报时间")
+                        Text("提醒时间")
                             .font(.system(size: 14, weight: .semibold))
                             .foregroundStyle(Color.hoyoNavy.opacity(0.55))
                         Text("可选择 24 小时内任意时间")

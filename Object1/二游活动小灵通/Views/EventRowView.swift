@@ -1,15 +1,28 @@
 import SwiftUI
 
 struct EventRowView: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var showReadStamp = false
+    @State private var showCompletionFlash = false
+    @State private var completionEffectCount = 0
+    @State private var isCompleting = false
+    @State private var urgencyPulse = false
+    @State private var completionArrivalVisible = false
+    @State private var completionTask: Task<Void, Never>? = nil
     let event:         RemoteEvent
     var showGameTag:   Bool          = true
     var isMuted:       Bool          = false
     var onTap:         (() -> Void)? = nil
     var onToggleMute:  (() -> Void)? = nil
+    var playCompletionArrival: Bool = false
     let onToggleDone:  () -> Void
 
     private var isUrgent: Bool {
         event.urgency == .critical || event.urgency == .warning
+    }
+
+    private var isCriticalSoon: Bool {
+        !event.isDone && event.remaining > 0 && event.remaining <= 86400
     }
 
     private var compactRemaining: String {
@@ -120,21 +133,52 @@ struct EventRowView: View {
 
                     // Countdown pill
                     HStack(spacing: 3) {
-                        Image(systemName: "clock")
+                        Image(systemName: showReadStamp ? "checkmark" : "clock")
                             .font(.system(size: 10, weight: .bold))
-                        Text(compactRemaining)
+                        Text(showReadStamp ? "已阅" : compactRemaining)
                             .font(.system(size: 12, weight: .black))
                     }
-                    .foregroundStyle(pillTextColor)
+                    .foregroundStyle(showReadStamp ? Color.white : pillTextColor)
                     .padding(.horizontal, 11)
                     .padding(.vertical, 6)
-                    .background(pillColor)
+                    .background(showReadStamp ? Color.hoyoMint : pillColor)
                     .clipShape(Capsule())
                     .overlay(
                         Capsule().stroke(
                             (event.isDone || event.remaining <= 0) ? Color.clear : Color.hoyoNavy,
                             lineWidth: 1.5
                         )
+                    )
+                    .overlay(alignment: .topTrailing) {
+                        if showReadStamp && !reduceMotion {
+                            Image(systemName: "sparkle")
+                                .font(.system(size: 11, weight: .black))
+                                .foregroundStyle(Color.hoyoYellow)
+                                .offset(x: 6, y: -7)
+                                .transition(.scale(scale: 0.2).combined(with: .opacity))
+                                .symbolEffect(.bounce, value: completionEffectCount)
+                        }
+                    }
+                    .overlay(alignment: .bottomLeading) {
+                        if showReadStamp && !reduceMotion {
+                            Image(systemName: "star.fill")
+                                .font(.system(size: 7, weight: .black))
+                                .foregroundStyle(Color.hoyoPink)
+                                .offset(x: -4, y: 5)
+                                .transition(.scale(scale: 0.2).combined(with: .opacity))
+                                .symbolEffect(.bounce, value: completionEffectCount)
+                        }
+                    }
+                    .shadow(color: showReadStamp ? Color.hoyoMint.opacity(0.58) : .clear,
+                            radius: showReadStamp ? 8 : 0)
+                    .scaleEffect(showReadStamp && !reduceMotion ? 1.06 : (isCriticalSoon && urgencyPulse && !reduceMotion ? 1.035 : 1))
+                    .contentTransition(.opacity)
+                    .animation(HoyoMotion.card, value: showReadStamp)
+                    .animation(
+                        isCriticalSoon && !showReadStamp && !reduceMotion
+                            ? .easeInOut(duration: 1.25).repeatForever(autoreverses: true)
+                            : nil,
+                        value: urgencyPulse
                     )
                 }
                 .padding(.leading, 10)
@@ -146,16 +190,17 @@ struct EventRowView: View {
 
             // Done toggle
             Button {
-                UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-                onToggleDone()
+                handleCompletionTap()
             } label: {
-                Image(systemName: event.isDone ? "checkmark.circle.fill" : "circle")
+                Image(systemName: (event.isDone || showReadStamp) ? "checkmark.circle.fill" : "circle")
                     .imageScale(.large)
-                    .foregroundStyle(event.isDone ? Color.hoyoMint : Color.hoyoNavy.opacity(0.25))
-                    .scaleEffect(event.isDone ? 1.18 : 1.0)
-                    .animation(.spring(response: 0.3, dampingFraction: 0.45), value: event.isDone)
+                    .foregroundStyle((event.isDone || showReadStamp) ? Color.hoyoMint : Color.hoyoNavy.opacity(0.25))
+                    .scaleEffect((event.isDone || showReadStamp) && !reduceMotion ? 1.18 : 1.0)
+                    .animation(reduceMotion ? nil : .spring(response: 0.3, dampingFraction: 0.45), value: event.isDone)
+                    .symbolEffect(.bounce, value: completionEffectCount)
             }
             .buttonStyle(.plain)
+            .disabled(isCompleting)
             .padding(.trailing, 14)
             .padding(.leading, 4)
             .accessibilityLabel(event.isDone ? "标记为未完成" : "标记为完成")
@@ -163,6 +208,14 @@ struct EventRowView: View {
         .padding(.vertical, 8)
         .background(Color.hoyoCardBg, in: RoundedRectangle(cornerRadius: 14))
         .overlay(RoundedRectangle(cornerRadius: 14).stroke(borderColor, lineWidth: borderWidth))
+        .overlay {
+            if showCompletionFlash {
+                RoundedRectangle(cornerRadius: 14)
+                    .fill(Color.hoyoMint.opacity(0.22))
+                    .allowsHitTesting(false)
+                    .transition(.opacity)
+            }
+        }
         .shadow(
             color: (event.isDone || event.remaining <= 0)
                 ? Color.clear
@@ -170,6 +223,9 @@ struct EventRowView: View {
             radius: 0, x: 2, y: 2
         )
         .opacity(event.isDone ? 0.65 : 1)
+        .scaleEffect(playCompletionArrival ? (completionArrivalVisible ? 1 : 0.96) : 1)
+        .offset(y: playCompletionArrival ? (completionArrivalVisible ? 0 : 8) : 0)
+        .opacity(playCompletionArrival ? (completionArrivalVisible ? 1 : 0) : 1)
         .contextMenu {
             if let toggleMute = onToggleMute, !event.isDone, event.remaining > 0 {
                 Button {
@@ -185,6 +241,54 @@ struct EventRowView: View {
                 Label(event.isDone ? "标记为未完成" : "标记为完成",
                       systemImage: event.isDone ? "arrow.uturn.backward.circle" : "checkmark.circle")
             }
+        }
+        .onAppear {
+            if isCriticalSoon && !reduceMotion { urgencyPulse = true }
+        }
+        .task(id: playCompletionArrival) {
+            guard playCompletionArrival else { return }
+            completionArrivalVisible = false
+            guard !reduceMotion else {
+                completionArrivalVisible = true
+                return
+            }
+            await Task.yield()
+            withAnimation(HoyoMotion.card) {
+                completionArrivalVisible = true
+            }
+        }
+        .onDisappear { completionTask?.cancel() }
+    }
+
+    private func handleCompletionTap() {
+        guard !isCompleting else { return }
+        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+
+        guard !event.isDone, !reduceMotion else {
+            withAnimation(reduceMotion ? nil : .spring(response: 0.42, dampingFraction: 0.82)) {
+                onToggleDone()
+            }
+            return
+        }
+
+        isCompleting = true
+        completionEffectCount += 1
+        withAnimation(HoyoMotion.card) {
+            showReadStamp = true
+            showCompletionFlash = true
+        }
+        completionTask?.cancel()
+        completionTask = Task { @MainActor in
+            do { try await Task.sleep(for: .milliseconds(200)) }
+            catch { return }
+            withAnimation(.easeOut(duration: 0.18)) { showCompletionFlash = false }
+            do { try await Task.sleep(for: .milliseconds(220)) }
+            catch { return }
+            UINotificationFeedbackGenerator().notificationOccurred(.success)
+            withAnimation(HoyoMotion.layout) {
+                onToggleDone()
+            }
+            isCompleting = false
         }
     }
 }

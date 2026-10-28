@@ -3,6 +3,11 @@ import SwiftData
 
 struct CustomGameDetailView: View {
     @Bindable var game: CustomGame
+    // false when the page is the split view's detail root, where there is nothing to go back to.
+    var showsBackButton = true
+    @Environment(AppRouter.self) private var router
+    @Environment(\.isWideLayout) private var isWideLayout
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.modelContext) private var modelContext
     @Environment(PurchaseService.self) private var purchaseService
 
@@ -13,9 +18,12 @@ struct CustomGameDetailView: View {
     @State private var articleURL    = ""
     @State private var pendingDrafts:    [AIEventDraft] = []
     @State private var editingEvent:     CustomEvent? = nil
-    @State private var guideEvent:       CustomEvent? = nil
     @State private var showCompleteGuide = false
+    @State private var saveErrorMessage: String? = nil
     @State private var webExtractorItem: WebExtractorTarget? = nil
+    @State private var recentlyCompletedEventID: String? = nil
+    @State private var showAIDisclosure = false
+    @State private var pendingRefreshAfterDisclosure = false
 
     private struct WebExtractorTarget: Identifiable {
         let id  = UUID()
@@ -38,19 +46,22 @@ struct CustomGameDetailView: View {
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
+        @Bindable var router = router
         ZStack {
             Color.hoyoBg.ignoresSafeArea(edges: .top)
 
-            Canvas { ctx, size in
-                for row in stride(from: 0, through: size.height, by: 22) {
-                    for col in stride(from: 0, through: size.width, by: 22) {
-                        let r = CGRect(x: col - 1.5, y: row - 1.5, width: 3, height: 3)
-                        ctx.fill(Path(ellipseIn: r), with: .color(Color.hoyoPink.opacity(0.12)))
+            if !isWideLayout {
+                Canvas { ctx, size in
+                    for row in stride(from: 0, through: size.height, by: 22) {
+                        for col in stride(from: 0, through: size.width, by: 22) {
+                            let r = CGRect(x: col - 1.5, y: row - 1.5, width: 3, height: 3)
+                            ctx.fill(Path(ellipseIn: r), with: .color(Color.hoyoPink.opacity(0.12)))
+                        }
                     }
                 }
+                .ignoresSafeArea()
+                .allowsHitTesting(false)
             }
-            .ignoresSafeArea()
-            .allowsHitTesting(false)
 
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 20) {
@@ -58,7 +69,7 @@ struct CustomGameDetailView: View {
                     if aiService.isSearching {
                         HStack(spacing: 10) {
                             ProgressView()
-                            Text("小的正在抓取公告并提取活动…")
+                            Text("婉婉正在读公告、整理活动…")
                                 .font(.subheadline)
                                 .foregroundStyle(Color.hoyoNavy.opacity(0.55))
                         }
@@ -70,56 +81,59 @@ struct CustomGameDetailView: View {
                             .foregroundStyle(.orange)
                             .font(.footnote)
                             .padding(.horizontal, 4)
+                            .transition(.move(edge: .top).combined(with: .opacity))
                     }
 
-                    // 一周内结束
-                    VStack(alignment: .leading, spacing: 10) {
-                        detailSectionHeader(systemImage: "bolt.fill",
-                                            iconBg: endingSoon.isEmpty ? Color.hoyoNavy.opacity(0.35) : Color.hoyoPink,
-                                            title: "七日内临期", count: endingSoon.count)
-                        if endingSoon.isEmpty {
-                            emptyState(text: "暂无临期活动", sub: "七日内暂无急事，小的先候着。")
-                        } else {
-                            VStack(spacing: 8) {
-                                ForEach(endingSoon) { event in
-                                    CustomEventRow(event: event) {
-                                        event.isDone.toggle()
-                                        NotificationManager.shared.rescheduleAll()
-                                    } onEdit: {
-                                        editingEvent = event
-                                    } onGuide: {
-                                        guideEvent = event
+                    AdaptiveTwoColumn {
+                        // 一周内结束
+                        VStack(alignment: .leading, spacing: 10) {
+                            detailSectionHeader(systemImage: "bolt.fill",
+                                                iconBg: endingSoon.isEmpty ? Color.hoyoNavy.opacity(0.35) : Color.hoyoPink,
+                                                title: "七日内临期", count: endingSoon.count)
+                            if endingSoon.isEmpty {
+                                emptyState(text: "暂无临期活动", sub: "7 天内没有急事，婉婉先待命。")
+                            } else {
+                                VStack(spacing: 8) {
+                                    ForEach(endingSoon) { event in
+                                        CustomEventRow(event: event) {
+                                            toggleDone(event)
+                                        } onEdit: {
+                                            editingEvent = event
+                                        } onGuide: {
+                                            router.customEvent = event
+                                        }
                                     }
                                 }
+                                .animation(reduceMotion ? nil : HoyoMotion.layout, value: endingSoon.map(\.id))
+                                HStack(spacing: 4) {
+                                    Image(systemName: "hand.tap").font(.caption2)
+                                    Text("轻触查看 B站攻略，长按可编辑或标记完成").font(.caption)
+                                }
+                                .foregroundStyle(Color.hoyoNavy.opacity(0.30))
+                                .padding(.top, 2)
                             }
-                            HStack(spacing: 4) {
-                                Image(systemName: "hand.tap").font(.caption2)
-                                Text("轻触查看 B站攻略，长按可编辑或标记完成").font(.caption)
-                            }
-                            .foregroundStyle(Color.hoyoNavy.opacity(0.30))
-                            .padding(.top, 2)
                         }
-                    }
-
-                    // 一周后待做
-                    VStack(alignment: .leading, spacing: 10) {
-                        detailSectionHeader(systemImage: "calendar",
-                                            iconBg: Color.hoyoMint,
-                                            title: "七日后待办", count: endingLater.count)
-                        if endingLater.isEmpty {
-                            emptyState(text: "暂无待办活动", sub: "后面暂无待办，小的继续盯着。")
-                        } else {
-                            VStack(spacing: 8) {
-                                ForEach(endingLater) { event in
-                                    CustomEventRow(event: event) {
-                                        event.isDone.toggle()
-                                        NotificationManager.shared.rescheduleAll()
-                                    } onEdit: {
-                                        editingEvent = event
-                                    } onGuide: {
-                                        guideEvent = event
+                    } trailing: {
+                        // 一周后待做
+                        VStack(alignment: .leading, spacing: 10) {
+                            detailSectionHeader(systemImage: "calendar",
+                                                iconBg: Color.hoyoMint,
+                                                title: "七日后待办", count: endingLater.count)
+                            if endingLater.isEmpty {
+                                emptyState(text: "暂无待办活动", sub: "后面暂时没有待办，婉婉继续盯着。")
+                            } else {
+                                VStack(spacing: 8) {
+                                    ForEach(endingLater) { event in
+                                        CustomEventRow(event: event) {
+                                            toggleDone(event)
+                                        } onEdit: {
+                                            editingEvent = event
+                                        } onGuide: {
+                                            router.customEvent = event
+                                        }
                                     }
                                 }
+                                .animation(reduceMotion ? nil : HoyoMotion.layout, value: endingLater.map(\.id))
                             }
                         }
                     }
@@ -132,22 +146,26 @@ struct CustomGameDetailView: View {
                                                 title: "已完成 & 已结束", count: doneOrExpired.count)
                             VStack(spacing: 8) {
                                 ForEach(doneOrExpired) { event in
-                                    CustomEventRow(event: event) {
-                                        event.isDone.toggle()
-                                        NotificationManager.shared.rescheduleAll()
+                                    CustomEventRow(
+                                        event: event,
+                                        playCompletionArrival: recentlyCompletedEventID == event.id
+                                    ) {
+                                        toggleDone(event)
                                     } onEdit: {
                                         editingEvent = event
                                     } onGuide: {
-                                        guideEvent = event
+                                        router.customEvent = event
                                     }
                                 }
                             }
+                            .animation(reduceMotion ? nil : HoyoMotion.layout, value: doneOrExpired.map(\.id))
                             .opacity(0.60)
                         }
                     }
                 }
                 .padding(16)
                 .padding(.bottom, 120)
+                .animation(reduceMotion ? .easeOut(duration: 0.15) : .spring(response: 0.35, dampingFraction: 0.78), value: aiService.errorMessage)
             }
         }
         .navigationBarBackButtonHidden(true)
@@ -183,11 +201,13 @@ struct CustomGameDetailView: View {
         .sheet(item: $webExtractorItem) { item in
             WebExtractorSheet(url: item.url) { extractedText, finalURL in
                 Task {
+                    let entitlementProof = await purchaseService.currentEntitlementJWS()
                     let result = await aiService.extractEvents(
                         from: extractedText,
                         gameName: game.name,
                         articleURL: finalURL,
-                        entitlementTier: purchaseService.tier
+                        entitlementTier: purchaseService.tier,
+                        appStoreTransactionJWS: entitlementProof
                     )
                     guard !result.isEmpty else { return }
                     pendingDrafts = result
@@ -196,16 +216,25 @@ struct CustomGameDetailView: View {
             }
         }
         .sheet(isPresented: $showPremium) { PremiumView() }
+        .sheet(isPresented: $showAIDisclosure) {
+            AIProcessingDisclosureView {
+                if pendingRefreshAfterDisclosure {
+                    pendingRefreshAfterDisclosure = false
+                    Task { await openRefreshInput() }
+                }
+            }
+        }
         .sheet(isPresented: $showConfirm) {
-            RefreshConfirmView(gameName: game.name, drafts: $pendingDrafts) { selected in
+            RefreshConfirmView(gameName: game.name, drafts: $pendingDrafts, saveErrorMessage: $saveErrorMessage) { selected in
                 applyRefresh(selected)
             }
         }
         .sheet(item: $editingEvent) { event in
             EditEventView(event: event)
         }
-        .navigationDestination(item: $guideEvent) { event in
+        .navigationDestination(item: $router.customEvent) { event in
             CustomEventGuideView(event: event, gameName: game.name, gameEmoji: game.emoji)
+                .verticalBarNavigation()
         }
         .sheet(isPresented: $showCompleteGuide) { CompleteTaskGuideSheet() }
     }
@@ -222,13 +251,20 @@ struct CustomGameDetailView: View {
         }?.url?.absoluteString
     }
 
-    private func applyRefresh(_ selected: [AIEventDraft]) {
+    private func applyRefresh(_ selected: [AIEventDraft]) -> Bool {
         let oldEventIds = game.replaceEvents(with: selected, in: modelContext)
-        try? modelContext.save()
-
-        NotificationManager.shared.cancelNotifications(forCustomActivityIds: oldEventIds)
-        UINotificationFeedbackGenerator().notificationOccurred(.success)
-        NotificationManager.shared.rescheduleAll()
+        do {
+            try modelContext.save()
+            saveErrorMessage = nil
+            NotificationManager.shared.cancelNotifications(forCustomActivityIds: oldEventIds)
+            UINotificationFeedbackGenerator().notificationOccurred(.success)
+            NotificationManager.shared.rescheduleAll()
+            return true
+        } catch {
+            modelContext.rollback()
+            saveErrorMessage = "保存失败：\(error.localizedDescription)"
+            return false
+        }
     }
 
     // MARK: - Section Header
@@ -269,12 +305,14 @@ struct CustomGameDetailView: View {
     @ToolbarContentBuilder
     private var toolbarItems: some ToolbarContent {
         ToolbarItem(placement: .topBarLeading) {
-            Button { dismiss() } label: {
-                Image(systemName: "chevron.left")
-                    .font(.system(size: 14, weight: .bold))
-                    .foregroundStyle(.white)
-                    .frame(width: 36, height: 36)
-                    .background(Color.hoyoNavy, in: RoundedRectangle(cornerRadius: 10))
+            if showsBackButton {
+                Button { dismiss() } label: {
+                    Image(systemName: "chevron.left")
+                        .font(.system(size: 14, weight: .bold))
+                        .foregroundStyle(.white)
+                        .frame(width: 36, height: 36)
+                        .background(Color.hoyoNavy, in: RoundedRectangle(cornerRadius: 10))
+                }
             }
         }
         ToolbarItem(placement: .principal) {
@@ -324,9 +362,35 @@ struct CustomGameDetailView: View {
         }
     }
 
+    private func toggleDone(_ event: CustomEvent) {
+        if event.isDone {
+            recentlyCompletedEventID = nil
+            event.isDone = false
+        } else {
+            recentlyCompletedEventID = event.id
+            event.isDone = true
+            Task { @MainActor in
+                try? await Task.sleep(for: .milliseconds(1200))
+                if recentlyCompletedEventID == event.id {
+                    recentlyCompletedEventID = nil
+                }
+            }
+        }
+        NotificationManager.shared.rescheduleAll()
+    }
+
     private func openRefreshInput() async {
+        guard UserDefaults.standard.bool(forKey: PrivacyConsent.aiConsentKey) else {
+            pendingRefreshAfterDisclosure = true
+            showAIDisclosure = true
+            return
+        }
         articleURL = ""
-        guard await aiService.canStartExtraction(entitlementTier: purchaseService.tier) else { return }
+        let entitlementProof = await purchaseService.currentEntitlementJWS()
+        guard await aiService.canStartExtraction(
+            entitlementTier: purchaseService.tier,
+            appStoreTransactionJWS: entitlementProof
+        ) else { return }
         showURLInput = true
     }
 }
@@ -387,7 +451,8 @@ struct EditEventView: View {
 struct RefreshConfirmView: View {
     let gameName: String
     @Binding var drafts: [AIEventDraft]
-    let onConfirm: ([AIEventDraft]) -> Void
+    @Binding var saveErrorMessage: String?
+    let onConfirm: ([AIEventDraft]) -> Bool
 
     @Environment(\.dismiss) private var dismiss
 
@@ -407,9 +472,9 @@ struct RefreshConfirmView: View {
                         .tint(Color.hoyoPink)
                     }
                 } header: {
-                    Text("小的找到 \(drafts.count) 个新活动")
+                    Label("AI 整理出 \(drafts.count) 个新活动", systemImage: "sparkles")
                 } footer: {
-                    Text("保存后会用勾选的新活动替换当前游戏的原有活动，完成状态和旧提醒也会清空重建。游戏名称、图标和颜色不会改变。日期仅供参考，请您确认后再保存。")
+                    Text("以上内容由 \(ComplianceConfig.aiModelName) 整理，仅供参考。请对照游戏官方公告核对后再保存；保存后会用勾选内容替换原活动并重建提醒。")
                         .font(.caption)
                 }
             }
@@ -423,12 +488,21 @@ struct RefreshConfirmView: View {
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("替换活动") {
-                        onConfirm(drafts.filter(\.isSelected))
-                        dismiss()
+                        if onConfirm(drafts.filter(\.isSelected)) {
+                            dismiss()
+                        }
                     }
                     .fontWeight(.semibold)
                     .disabled(drafts.filter(\.isSelected).isEmpty)
                 }
+            }
+            .alert("保存失败", isPresented: Binding(
+                get: { saveErrorMessage != nil },
+                set: { if !$0 { saveErrorMessage = nil } }
+            )) {
+                Button("知道了", role: .cancel) {}
+            } message: {
+                Text(saveErrorMessage ?? "")
             }
         }
     }
@@ -496,13 +570,26 @@ struct ArticleURLInputView: View {
 // MARK: - Custom Event Row
 
 struct CustomEventRow: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var showReadStamp = false
+    @State private var showCompletionFlash = false
+    @State private var completionEffectCount = 0
+    @State private var isCompleting = false
+    @State private var urgencyPulse = false
+    @State private var completionArrivalVisible = false
+    @State private var completionTask: Task<Void, Never>? = nil
     @Bindable var event: CustomEvent
+    var playCompletionArrival: Bool = false
     let onToggleDone: () -> Void
     let onEdit: () -> Void
     var onGuide: (() -> Void)? = nil
 
     private var isUrgent: Bool {
         !event.isDone && event.remaining > 0 && event.remaining <= 2 * 86400
+    }
+
+    private var isCriticalSoon: Bool {
+        !event.isDone && event.remaining > 0 && event.remaining <= 86400
     }
 
     private var compactRemaining: String {
@@ -566,12 +653,13 @@ struct CustomEventRow: View {
 
                     // Countdown pill
                     HStack(spacing: 3) {
-                        Image(systemName: "clock").font(.system(size: 10, weight: .bold))
-                        Text(compactRemaining).font(.system(size: 12, weight: .black))
+                        Image(systemName: showReadStamp ? "checkmark" : "clock").font(.system(size: 10, weight: .bold))
+                        Text(showReadStamp ? "已阅" : compactRemaining).font(.system(size: 12, weight: .black))
                     }
-                    .foregroundStyle((event.isDone || event.remaining <= 0) ? .secondary : (isUrgent ? .white : Color.hoyoNavy))
+                    .foregroundStyle(showReadStamp ? Color.white : ((event.isDone || event.remaining <= 0) ? Color.secondary : (isUrgent ? Color.white : Color.hoyoNavy)))
                     .padding(.horizontal, 11).padding(.vertical, 6)
                     .background(
+                        showReadStamp ? Color.hoyoMint :
                         (event.isDone || event.remaining <= 0) ? Color.gray.opacity(0.20) :
                         (isUrgent ? Color.hoyoPink : Color.hoyoYellow)
                     )
@@ -580,6 +668,37 @@ struct CustomEventRow: View {
                         (event.isDone || event.remaining <= 0) ? Color.clear : Color.hoyoNavy,
                         lineWidth: 1.5
                     ))
+                    .overlay(alignment: .topTrailing) {
+                        if showReadStamp && !reduceMotion {
+                            Image(systemName: "sparkle")
+                                .font(.system(size: 11, weight: .black))
+                                .foregroundStyle(Color.hoyoYellow)
+                                .offset(x: 6, y: -7)
+                                .transition(.scale(scale: 0.2).combined(with: .opacity))
+                                .symbolEffect(.bounce, value: completionEffectCount)
+                        }
+                    }
+                    .overlay(alignment: .bottomLeading) {
+                        if showReadStamp && !reduceMotion {
+                            Image(systemName: "star.fill")
+                                .font(.system(size: 7, weight: .black))
+                                .foregroundStyle(Color.hoyoPink)
+                                .offset(x: -4, y: 5)
+                                .transition(.scale(scale: 0.2).combined(with: .opacity))
+                                .symbolEffect(.bounce, value: completionEffectCount)
+                        }
+                    }
+                    .shadow(color: showReadStamp ? Color.hoyoMint.opacity(0.58) : .clear,
+                            radius: showReadStamp ? 8 : 0)
+                    .scaleEffect(showReadStamp && !reduceMotion ? 1.06 : (isCriticalSoon && urgencyPulse && !reduceMotion ? 1.035 : 1))
+                    .contentTransition(.opacity)
+                    .animation(HoyoMotion.card, value: showReadStamp)
+                    .animation(
+                        isCriticalSoon && !showReadStamp && !reduceMotion
+                            ? .easeInOut(duration: 1.25).repeatForever(autoreverses: true)
+                            : nil,
+                        value: urgencyPulse
+                    )
                 }
                 .padding(.leading, 10).padding(.trailing, 4)
                 .contentShape(Rectangle())
@@ -589,29 +708,89 @@ struct CustomEventRow: View {
 
             // Done toggle
             Button {
-                UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-                onToggleDone()
+                handleCompletionTap()
             } label: {
-                Image(systemName: event.isDone ? "checkmark.circle.fill" : "circle")
+                Image(systemName: (event.isDone || showReadStamp) ? "checkmark.circle.fill" : "circle")
                     .imageScale(.large)
-                    .foregroundStyle(event.isDone ? Color.hoyoMint : Color.hoyoNavy.opacity(0.25))
-                    .scaleEffect(event.isDone ? 1.18 : 1.0)
-                    .animation(.spring(response: 0.3, dampingFraction: 0.45), value: event.isDone)
+                    .foregroundStyle((event.isDone || showReadStamp) ? Color.hoyoMint : Color.hoyoNavy.opacity(0.25))
+                    .scaleEffect((event.isDone || showReadStamp) && !reduceMotion ? 1.18 : 1.0)
+                    .animation(reduceMotion ? nil : .spring(response: 0.3, dampingFraction: 0.45), value: event.isDone)
+                    .symbolEffect(.bounce, value: completionEffectCount)
             }
             .buttonStyle(.plain)
+            .disabled(isCompleting)
             .padding(.trailing, 14).padding(.leading, 4)
         }
         .padding(.vertical, 8)
         .background(Color.hoyoCardBg, in: RoundedRectangle(cornerRadius: 14))
         .overlay(RoundedRectangle(cornerRadius: 14).stroke(borderColor, lineWidth: isUrgent ? 2.5 : 2))
+        .overlay {
+            if showCompletionFlash {
+                RoundedRectangle(cornerRadius: 14)
+                    .fill(Color.hoyoMint.opacity(0.22))
+                    .allowsHitTesting(false)
+                    .transition(.opacity)
+            }
+        }
         .shadow(color: isUrgent ? Color.hoyoPink.opacity(0.25) : Color.hoyoNavy.opacity(0.12), radius: 0, x: 2, y: 2)
         .opacity(event.isDone ? 0.65 : 1)
+        .scaleEffect(playCompletionArrival ? (completionArrivalVisible ? 1 : 0.96) : 1)
+        .offset(y: playCompletionArrival ? (completionArrivalVisible ? 0 : 8) : 0)
+        .opacity(playCompletionArrival ? (completionArrivalVisible ? 1 : 0) : 1)
         .contextMenu {
             Button { onEdit() } label: { Label("编辑活动", systemImage: "pencil") }
             Button { onToggleDone() } label: {
                 Label(event.isDone ? "标记为未完成" : "标记为完成",
                       systemImage: event.isDone ? "arrow.uturn.backward.circle" : "checkmark.circle")
             }
+        }
+        .onAppear {
+            if isCriticalSoon && !reduceMotion { urgencyPulse = true }
+        }
+        .task(id: playCompletionArrival) {
+            guard playCompletionArrival else { return }
+            completionArrivalVisible = false
+            guard !reduceMotion else {
+                completionArrivalVisible = true
+                return
+            }
+            await Task.yield()
+            withAnimation(HoyoMotion.card) {
+                completionArrivalVisible = true
+            }
+        }
+        .onDisappear { completionTask?.cancel() }
+    }
+
+    private func handleCompletionTap() {
+        guard !isCompleting else { return }
+        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+
+        guard !event.isDone, !reduceMotion else {
+            withAnimation(reduceMotion ? nil : .spring(response: 0.42, dampingFraction: 0.82)) {
+                onToggleDone()
+            }
+            return
+        }
+
+        isCompleting = true
+        completionEffectCount += 1
+        withAnimation(HoyoMotion.card) {
+            showReadStamp = true
+            showCompletionFlash = true
+        }
+        completionTask?.cancel()
+        completionTask = Task { @MainActor in
+            do { try await Task.sleep(for: .milliseconds(200)) }
+            catch { return }
+            withAnimation(.easeOut(duration: 0.18)) { showCompletionFlash = false }
+            do { try await Task.sleep(for: .milliseconds(220)) }
+            catch { return }
+            UINotificationFeedbackGenerator().notificationOccurred(.success)
+            withAnimation(HoyoMotion.layout) {
+                onToggleDone()
+            }
+            isCompleting = false
         }
     }
 }
@@ -625,96 +804,100 @@ struct CustomEventGuideView: View {
 
     @Environment(\.openURL)  private var openURL
     @Environment(\.dismiss)  private var dismiss
+    @Environment(\.hasVerticalBar) private var hasVerticalBar
+    @Environment(\.isWideLayout) private var isWideLayout
     @Query private var prefsQuery: [UserPreferences]
-
-    @State private var appeared = false
 
     private var prefs: UserPreferences? { prefsQuery.first }
     private var isUrgent: Bool { !event.isDone && event.remaining > 0 && event.remaining <= 2 * 86400 }
 
-    private var bilibiliSearchURL: URL {
-        let q       = "\(gameName) \(event.title) 攻略"
-        let encoded = q.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
-        return URL(string: "https://search.bilibili.com/all?keyword=\(encoded)")!
+    private var bilibiliSearchKeyword: String {
+        let q = "\(gameName) \(event.title) 攻略"
+        return q.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
+    }
+
+    private var bilibiliAppSearchURL: URL {
+        URL(string: "bilibili://search?keyword=\(bilibiliSearchKeyword)")!
+    }
+
+    private var bilibiliWebSearchURL: URL {
+        URL(string: "https://search.bilibili.com/all?keyword=\(bilibiliSearchKeyword)")!
+    }
+
+    // 优先唤起 B站 App，未安装时回退到网页搜索
+    private func openBilibiliSearch() {
+        openURL(bilibiliAppSearchURL) { accepted in
+            if !accepted { openURL(bilibiliWebSearchURL) }
+        }
     }
 
     var body: some View {
-        ZStack(alignment: .bottom) {
+        ZStack {
             Color.white.ignoresSafeArea()
 
-            Canvas { ctx, size in
-                for row in stride(from: 0, through: size.height, by: 24) {
-                    for col in stride(from: 0, through: size.width, by: 24) {
-                        let r = CGRect(x: col - 1, y: row - 1, width: 2, height: 2)
-                        ctx.fill(Path(ellipseIn: r), with: .color(Color.hoyoNavy.opacity(0.05)))
+            if !isWideLayout {
+                Canvas { ctx, size in
+                    for row in stride(from: 0, through: size.height, by: 24) {
+                        for col in stride(from: 0, through: size.width, by: 24) {
+                            let r = CGRect(x: col - 1, y: row - 1, width: 2, height: 2)
+                            ctx.fill(Path(ellipseIn: r), with: .color(Color.hoyoNavy.opacity(0.05)))
+                        }
                     }
                 }
+                .ignoresSafeArea()
+                .allowsHitTesting(false)
             }
-            .ignoresSafeArea()
-            .allowsHitTesting(false)
 
             ScrollView {
                 VStack(spacing: 16) {
                     heroCard
-                        .opacity(appeared ? 1 : 0).offset(y: appeared ? 0 : 24)
-                        .animation(.spring(response: 0.5, dampingFraction: 0.72), value: appeared)
-
                     bilibiliCard
-                        .opacity(appeared ? 1 : 0).offset(y: appeared ? 0 : 24)
-                        .animation(.spring(response: 0.5, dampingFraction: 0.72).delay(0.09), value: appeared)
-
                     detailCard
-                        .opacity(appeared ? 1 : 0).offset(y: appeared ? 0 : 24)
-                        .animation(.spring(response: 0.5, dampingFraction: 0.72).delay(0.16), value: appeared)
-
                 }
                 .padding(16)
-                .padding(.bottom, 110)
+                .padding(.bottom, 92)
             }
-
-            // Bottom action button
-            VStack(spacing: 0) {
-                Button { toggleDone() } label: {
-                    HStack(spacing: 8) {
-                        Text(event.isDone ? "↩" : "✓")
-                            .font(.system(size: 17, weight: .black))
-                        Text(event.isDone ? "标记为未完成" : "标记为已完成")
-                            .font(.system(size: 16, weight: .black, design: .rounded))
-                        if !event.isDone {
-                            Image(systemName: "star.fill")
-                                .font(.system(size: 11))
-                                .foregroundStyle(Color.hoyoYellow)
-                        }
-                    }
-                    .foregroundStyle(.white)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 18)
-                    .background(
-                        LinearGradient(
-                            colors: event.isDone
-                                ? [Color.hoyoMint, Color(hex: "2aa99f")]
-                                : [Color.hoyoPink, Color(hex: "FF4DA6")],
-                            startPoint: .leading, endPoint: .trailing
-                        ),
-                        in: RoundedRectangle(cornerRadius: 18)
-                    )
-                    .shadow(color: (event.isDone ? Color.hoyoMint : Color.hoyoPink).opacity(0.40),
-                            radius: 12, x: 0, y: 4)
-                }
-                .buttonStyle(CardPressStyle())
-                .padding(.horizontal, 16)
-                .padding(.bottom, 24)
-            }
-            .ignoresSafeArea(edges: .bottom)
         }
+        .overlay(alignment: .bottom) { bottomActionButton }
         .navigationBarBackButtonHidden(true)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar { toolbarContent }
         .fontDesign(.rounded)
-        .task {
-            try? await Task.sleep(for: .milliseconds(160))
-            withAnimation(.spring(response: 0.5, dampingFraction: 0.72)) { appeared = true }
+    }
+
+    private var bottomActionButton: some View {
+        Button { toggleDone() } label: {
+            HStack(spacing: 8) {
+                Text(event.isDone ? "↩" : "✓")
+                    .font(.system(size: 17, weight: .black))
+                Text(event.isDone ? "标记为未完成" : "标记为已完成")
+                    .font(.system(size: 16, weight: .black, design: .rounded))
+                if !event.isDone {
+                    Image(systemName: "star.fill")
+                        .font(.system(size: 11))
+                        .foregroundStyle(Color.hoyoYellow)
+                }
+            }
+            .foregroundStyle(.white)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 18)
+            .background(
+                LinearGradient(
+                    colors: event.isDone
+                        ? [Color.hoyoMint, Color(hex: "2aa99f")]
+                        : [Color.hoyoPink, Color(hex: "FF4DA6")],
+                    startPoint: .leading, endPoint: .trailing
+                ),
+                in: RoundedRectangle(cornerRadius: 18)
+            )
+            .shadow(color: (event.isDone ? Color.hoyoMint : Color.hoyoPink).opacity(0.40),
+                    radius: 12, x: 0, y: 4)
         }
+        .buttonStyle(CardPressStyle())
+        .padding(.horizontal, 16)
+        .padding(.top, 10)
+        .padding(.bottom, 6)
+        .background(.white.opacity(0.96))
     }
 
     // MARK: - Hero Card
@@ -730,11 +913,6 @@ struct CustomEventGuideView: View {
                     .background(Color.hoyoNavy.opacity(0.45), in: Capsule())
 
                 Spacer()
-
-                HStack(spacing: 10) {
-                    Text("♥").font(.system(size: 18)).foregroundStyle(.white.opacity(0.60))
-                    Text("★").font(.system(size: 18)).foregroundStyle(.white.opacity(0.60))
-                }
             }
             .padding(.bottom, 14)
 
@@ -782,7 +960,7 @@ struct CustomEventGuideView: View {
     // MARK: - Bilibili Card
 
     private var bilibiliCard: some View {
-        Button { openURL(bilibiliSearchURL) } label: {
+        Button { openBilibiliSearch() } label: {
             HStack(spacing: 14) {
                 RoundedRectangle(cornerRadius: 12)
                     .fill(Color(hex: "00A1D6"))
@@ -865,12 +1043,15 @@ struct CustomEventGuideView: View {
     @ToolbarContentBuilder
     private var toolbarContent: some ToolbarContent {
         ToolbarItem(placement: .topBarLeading) {
-            Button { dismiss() } label: {
-                Image(systemName: "chevron.left")
-                    .font(.system(size: 14, weight: .bold))
-                    .foregroundStyle(.white)
-                    .frame(width: 36, height: 36)
-                    .background(Color.hoyoNavy, in: RoundedRectangle(cornerRadius: 10))
+            // With the vertical bar, 返回 lives there instead.
+            if !hasVerticalBar {
+                Button { dismiss() } label: {
+                    Image(systemName: "chevron.left")
+                        .font(.system(size: 14, weight: .bold))
+                        .foregroundStyle(.white)
+                        .frame(width: 36, height: 36)
+                        .background(Color.hoyoNavy, in: RoundedRectangle(cornerRadius: 10))
+                }
             }
         }
         ToolbarItem(placement: .principal) {
@@ -1065,8 +1246,8 @@ struct CompleteTaskGuideSheet: View {
                 Section {
                     stepRow(
                         number: "1",
-                        title:  "收到每日禀报",
-                        detail: "每天在您设置的时间（默认 21:00），小的只会为 7 天内临期活动发送提醒。"
+                        title:  "收到每日提醒",
+                        detail: "每天在你设置的时间（默认 21:00），婉婉只提醒 7 天内快结束的活动。"
                     )
                     stepRow(
                         number: "2",

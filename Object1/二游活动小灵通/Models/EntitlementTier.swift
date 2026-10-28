@@ -49,6 +49,4 @@ enum EntitlementTier: String, Codable, Sendable {
             return "会员最多可添加 \(maxCustomGames) 个自定义游戏。当前已有 \(currentCount) 个，请先删除不需要的游戏后再添加。"
         }
     }
-
-    var backendHeaderValue: String { rawValue }
 }

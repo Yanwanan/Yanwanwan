@@ -12,18 +12,17 @@ final class UserPreferences {
     var dailyReminderEnabled: Bool
     var cachedGenshinJSON: Data?
     var cachedStarrailJSON: Data?
-    var seenCodeIds: [String]
+    var cachedZenlessJSON: Data?
     var lastFetchedAt: Date?
 
     init(
-        followedGameSlugs: [String] = ["genshin", "starrail"],
+        followedGameSlugs: [String] = ["genshin", "starrail", "zenless"],
         completedEventIds: [String] = [],
         mutedEventIds: [String] = [],
         notificationLeadHours: Int = 24,
         notificationHour: Int = 21,
         notificationMinute: Int = 0,
-        dailyReminderEnabled: Bool = true,
-        seenCodeIds: [String] = []
+        dailyReminderEnabled: Bool = true
     ) {
         self.followedGameSlugs = followedGameSlugs
         self.completedEventIds = completedEventIds
@@ -32,7 +31,6 @@ final class UserPreferences {
         self.notificationHour = notificationHour
         self.notificationMinute = notificationMinute
         self.dailyReminderEnabled = dailyReminderEnabled
-        self.seenCodeIds = seenCodeIds
     }
 
     var followedGames: [HoYoGame] {
@@ -76,6 +74,23 @@ final class UserPreferences {
         mutedEventIds = mutedEventIds.filter { liveIds.contains($0) }
     }
 
+    // Challenge IDs used to be "{game}_challenge_{apiId}". The API can reuse the
+    // same numeric ID for different challenges, so those saved states are
+    // ambiguous and must not be applied to the new compound IDs.
+    func removeLegacyChallengeState() {
+        let legacyPrefixes = HoYoGame.allCases.map { "\($0.rawValue)_challenge_" }
+
+        func isLegacyChallengeID(_ id: String) -> Bool {
+            guard let prefix = legacyPrefixes.first(where: { id.hasPrefix($0) }) else {
+                return false
+            }
+            return id.dropFirst(prefix.count).allSatisfy(\.isNumber)
+        }
+
+        completedEventIds = completedEventIds.filter { !isLegacyChallengeID($0) }
+        mutedEventIds = mutedEventIds.filter { !isLegacyChallengeID($0) }
+    }
+
     func markIncomplete(_ eventId: String) {
         completedEventIds = completedEventIds.filter { $0 != eventId }
     }
@@ -84,17 +99,11 @@ final class UserPreferences {
         completedEventIds.contains(eventId)
     }
 
-    func markCodeSeen(_ codeId: String) {
-        guard !seenCodeIds.contains(codeId) else { return }
-        seenCodeIds = seenCodeIds + [codeId]
-    }
-
-    func hasSeenCode(_ codeId: String) -> Bool { seenCodeIds.contains(codeId) }
-
     func cachedJSON(for game: HoYoGame) -> Data? {
         switch game {
         case .genshin:  return cachedGenshinJSON
         case .starrail: return cachedStarrailJSON
+        case .zenless:  return cachedZenlessJSON
         }
     }
 
@@ -102,6 +111,7 @@ final class UserPreferences {
         switch game {
         case .genshin:  cachedGenshinJSON = data
         case .starrail: cachedStarrailJSON = data
+        case .zenless:  cachedZenlessJSON = data
         }
     }
 

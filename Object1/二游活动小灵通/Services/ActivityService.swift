@@ -18,6 +18,7 @@ final class ActivityService {
         isLoading = true
         errorMessage = nil
 
+        preferences.removeLegacyChallengeState()
         let games        = preferences.followedGames
         let completedIds = Set(preferences.completedEventIds)
 
@@ -48,7 +49,7 @@ final class ActivityService {
         if hadNetworkError && fetched.isEmpty {
             // Network failed and no cache available — keep whatever events are already shown
             // (populated by loadFromCache before this refresh ran) and surface the error.
-            errorMessage = "网络暂时不可用，小的先呈上缓存数据"
+            errorMessage = "网络开小差了，婉婉先给你看缓存数据"
         } else {
             // Success or partial cache fallback — update events list.
             events = sorted(fetched)
@@ -71,6 +72,7 @@ final class ActivityService {
 
     // Load cache immediately without network, to avoid blank screen on launch.
     func loadFromCache(preferences: UserPreferences) {
+        preferences.removeLegacyChallengeState()
         let completedIds = Set(preferences.completedEventIds)
         var cached: [RemoteEvent] = []
 
@@ -120,8 +122,12 @@ final class ActivityService {
     ) -> [RemoteEvent] {
         var result: [RemoteEvent] = []
         result += response.events.map     { RemoteEvent.from($0, game: game, completedIds: completedIds) }
-        result += response.challenges.map { RemoteEvent.from($0, game: game, completedIds: completedIds) }
-        return result.filter { $0.remaining > -24 * 3600 }
+        result += response.challenges.compactMap { RemoteEvent.from($0, game: game, completedIds: completedIds) }
+
+        var seenIds = Set<String>()
+        return result.filter {
+            $0.remaining > -24 * 3600 && seenIds.insert($0.id).inserted
+        }
     }
 
     private func sorted(_ events: [RemoteEvent]) -> [RemoteEvent] {

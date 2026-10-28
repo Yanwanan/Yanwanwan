@@ -1,0 +1,12 @@
+{
+  "images" : [
+    {
+      "filename" : "wanwan_cheer.png",
+      "idiom" : "universal"
+    }
+  ],
+  "info" : {
+    "author" : "xcode",
+    "version" : 1
+  }
+}

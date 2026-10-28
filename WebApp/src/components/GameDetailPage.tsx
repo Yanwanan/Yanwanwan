@@ -1,6 +1,5 @@
-import { ChevronLeft, Gift, Zap, Calendar, RefreshCw, Settings } from 'lucide-react'
+import { ChevronLeft, Zap, Calendar, RefreshCw, Settings } from 'lucide-react'
 import { EventRow } from './EventRow'
-import { ExchangeCodeRow } from './ExchangeCodeRow'
 import { formatRemaining } from '../lib/utils'
 import type { Game } from '../types'
 
@@ -48,8 +47,6 @@ export function GameDetailPage({ game, onBack, onEventClick, onToggleDone }: Gam
     .filter(e => e.isDone || e.endTimestamp <= now)
     .sort((a, b) => b.endTimestamp - a.endTimestamp)
 
-  const codes = game.exchangeCodes ?? []
-
   return (
     <div className="flex flex-col h-full bg-[#FDF0F8]">
       {/* Nav bar */}
@@ -84,29 +81,6 @@ export function GameDetailPage({ game, onBack, onEventClick, onToggleDone }: Gam
       {/* Scrollable content */}
       <div className="flex-1 overflow-y-auto px-4 pb-28">
         <div className="space-y-5">
-
-          {/* Exchange codes */}
-          {codes.length > 0 && (
-            <div>
-              <SectionLabel
-                icon={<Gift size={14} strokeWidth={2.5} />}
-                iconBg="#FF6EB4"
-                title="前瞻兑换码"
-                count={codes.length}
-              />
-              <div
-                className="bg-white rounded-[18px] border-[1.5px] border-[#2C2555]/12 overflow-hidden"
-                style={{ boxShadow: '0 4px 16px rgba(44,37,85,0.08)' }}
-              >
-                {codes.map((code, idx) => (
-                  <div key={code.id}>
-                    {idx > 0 && <div className="h-px bg-[#2C2555]/06 mx-4" />}
-                    <ExchangeCodeRow code={code} />
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
 
           {/* Ending soon (within 7 days) */}
           <div>

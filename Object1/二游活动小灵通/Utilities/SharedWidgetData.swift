@@ -52,4 +52,8 @@ enum SharedWidgetData {
         else { return [] }
         return events
     }
+
+    static func clear() {
+        UserDefaults(suiteName: sharedAppGroupID)?.removeObject(forKey: key)
+    }
 }

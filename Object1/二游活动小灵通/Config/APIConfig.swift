@@ -2,28 +2,30 @@ import Foundation
 
 enum APIConfig {
     private static let railwayBackendBaseURL = "https://yanwanwan-production-edd3.up.railway.app"
-    private static let useLocalBackendInDebug = false
-
-    #if DEBUG
-    static let aiBackendBaseURL = useLocalBackendInDebug ? localBackendBaseURL : railwayBackendBaseURL
-    #else
     static let aiBackendBaseURL = railwayBackendBaseURL
-    #endif
 
-    #if targetEnvironment(simulator)
-    private static let localBackendBaseURL = "http://127.0.0.1:8787"
-    #else
-    private static let localBackendBaseURL = "http://192.168.110.98:8787"
-    #endif
+    private static var trimmedAIBackendBaseURL: String {
+        aiBackendBaseURL.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+    }
 
     static var aiExtractorURL: URL? {
-        let trimmedBaseURL = aiBackendBaseURL.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-        return URL(string: "\(trimmedBaseURL)/api/extract-events")
+        URL(string: "\(trimmedAIBackendBaseURL)/api/extract-events")
     }
 
     static var quotaURL: URL? {
-        let trimmedBaseURL = aiBackendBaseURL.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-        return URL(string: "\(trimmedBaseURL)/api/quota")
+        URL(string: "\(trimmedAIBackendBaseURL)/api/quota")
+    }
+
+    static var privacyPolicyURL: URL? {
+        URL(string: "\(trimmedAIBackendBaseURL)/privacy")
+    }
+
+    static var termsOfServiceURL: URL? {
+        URL(string: "\(trimmedAIBackendBaseURL)/terms")
+    }
+
+    static var dataDeletionURL: URL? {
+        URL(string: "\(trimmedAIBackendBaseURL)/api/user-data")
     }
 
     static var isAIBackendConfigured: Bool {

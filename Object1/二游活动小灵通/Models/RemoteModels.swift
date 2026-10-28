@@ -6,6 +6,7 @@ import SwiftUI
 enum HoYoGame: String, CaseIterable, Identifiable {
     case genshin  = "genshin"
     case starrail = "starrail"
+    case zenless  = "zenless"
 
     var id: String { rawValue }
 
@@ -13,6 +14,7 @@ enum HoYoGame: String, CaseIterable, Identifiable {
         switch self {
         case .genshin:  return "原神"
         case .starrail: return "崩坏：星穹铁道"
+        case .zenless:  return "绝区零"
         }
     }
 
@@ -20,6 +22,7 @@ enum HoYoGame: String, CaseIterable, Identifiable {
         switch self {
         case .genshin:  return "🌿"
         case .starrail: return "⭐"
+        case .zenless:  return "⚡️"
         }
     }
 
@@ -27,6 +30,7 @@ enum HoYoGame: String, CaseIterable, Identifiable {
         switch self {
         case .genshin:  return .hoyoMint
         case .starrail: return .hoyoPink
+        case .zenless:  return .hoyoYellow
         }
     }
 
@@ -34,6 +38,7 @@ enum HoYoGame: String, CaseIterable, Identifiable {
         switch self {
         case .genshin:  return "Genshin Impact"
         case .starrail: return "Honkai Star Rail"
+        case .zenless:  return "Zenless Zone Zero"
         }
     }
 
@@ -41,6 +46,7 @@ enum HoYoGame: String, CaseIterable, Identifiable {
         switch self {
         case .genshin:  return Color(hex: "7B5EA7")
         case .starrail: return Color(hex: "4A72C4")
+        case .zenless:  return Color(hex: "E2A900")
         }
     }
 }
@@ -57,13 +63,11 @@ extension RemoteEvent: Hashable {
 
 struct CalendarResponse: Codable {
     var events:     [APIEvent]
-    var banners:    [APIBanner]
     var challenges: [APIChallenge]
 
     init(from decoder: any Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         events     = (try? c.decode([APIEvent].self,     forKey: .events))     ?? []
-        banners    = (try? c.decode([APIBanner].self,    forKey: .banners))    ?? []
         challenges = (try? c.decode([APIChallenge].self, forKey: .challenges)) ?? []
     }
 }
@@ -78,20 +82,12 @@ struct APIEvent: Codable {
     let endTime:     Int
 }
 
-struct APIBanner: Codable {
-    let id:        Int
-    let name:      String
-    let version:   String?
-    let startTime: Int
-    let endTime:   Int
-}
-
 struct APIChallenge: Codable {
     let id:        Int
     let name:      String
     let typeName:  String?
-    let startTime: Int
-    let endTime:   Int
+    let startTime: Int?
+    let endTime:   Int?
 }
 
 // MARK: - Unified Display Model
@@ -171,30 +167,28 @@ struct RemoteEvent: Identifiable {
         )
     }
 
-    static func from(_ b: APIBanner, game: HoYoGame, completedIds: Set<String>) -> RemoteEvent {
-        let id = "\(game.rawValue)_banner_\(b.id)"
-        return RemoteEvent(
-            id:        id,
-            game:      game,
-            title:     b.name,
-            category:  "卡池",
-            startDate: Date(timeIntervalSince1970: TimeInterval(b.startTime)),
-            endDate:   Date(timeIntervalSince1970: TimeInterval(b.endTime)),
-            subtitle:  b.version.map { "Ver \($0)" },
-            imageURL:  nil,
-            isDone:    completedIds.contains(id)
-        )
-    }
-
-    static func from(_ c: APIChallenge, game: HoYoGame, completedIds: Set<String>) -> RemoteEvent {
-        let id = "\(game.rawValue)_challenge_\(c.id)"
+    static func from(_ c: APIChallenge, game: HoYoGame, completedIds: Set<String>) -> RemoteEvent? {
+        guard let startTime = c.startTime, let endTime = c.endTime else { return nil }
+        // Challenge IDs from the upstream API are not globally unique. For example,
+        // Genshin may return both Spiral Abyss and Imaginarium Theater with id == 0.
+        // Include the challenge kind and cycle so SwiftUI and persisted state can
+        // distinguish them while keeping the identity stable across refreshes.
+        let challengeKind = c.typeName ?? c.name
+        let id = [
+            game.rawValue,
+            "challenge",
+            String(c.id),
+            challengeKind,
+            String(startTime),
+            String(endTime)
+        ].joined(separator: "_")
         return RemoteEvent(
             id:        id,
             game:      game,
             title:     c.name,
             category:  "挑战",
-            startDate: Date(timeIntervalSince1970: TimeInterval(c.startTime)),
-            endDate:   Date(timeIntervalSince1970: TimeInterval(c.endTime)),
+            startDate: Date(timeIntervalSince1970: TimeInterval(startTime)),
+            endDate:   Date(timeIntervalSince1970: TimeInterval(endTime)),
             subtitle:  c.typeName,
             imageURL:  nil,
             isDone:    completedIds.contains(id)

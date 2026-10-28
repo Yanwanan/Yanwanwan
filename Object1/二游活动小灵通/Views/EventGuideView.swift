@@ -7,105 +7,107 @@ struct EventGuideView: View {
     @Environment(ActivityService.self) private var service
     @Environment(\.openURL)            private var openURL
     @Environment(\.dismiss)            private var dismiss
+    @Environment(\.hasVerticalBar)     private var hasVerticalBar
+    @Environment(\.isWideLayout) private var isWideLayout
     @Query private var prefsQuery: [UserPreferences]
-
-    @State private var appeared = false
 
     private var prefs: UserPreferences? { prefsQuery.first }
     private var isUrgent: Bool { event.urgency == .critical || event.urgency == .warning }
 
-    private var bilibiliSearchURL: URL {
+    private var bilibiliSearchKeyword: String {
         let q = "\(event.game.displayName) \(event.title) 攻略"
-        let encoded = q.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
-        return URL(string: "https://search.bilibili.com/all?keyword=\(encoded)")!
+        return q.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
+    }
+
+    private var bilibiliAppSearchURL: URL {
+        URL(string: "bilibili://search?keyword=\(bilibiliSearchKeyword)")!
+    }
+
+    private var bilibiliWebSearchURL: URL {
+        URL(string: "https://search.bilibili.com/all?keyword=\(bilibiliSearchKeyword)")!
+    }
+
+    // 优先唤起 B站 App，未安装时回退到网页搜索
+    private func openBilibiliSearch() {
+        openURL(bilibiliAppSearchURL) { accepted in
+            if !accepted { openURL(bilibiliWebSearchURL) }
+        }
     }
 
     var body: some View {
-        ZStack(alignment: .bottom) {
+        ZStack {
             Color.white.ignoresSafeArea()
 
-            Canvas { ctx, size in
-                for row in stride(from: 0, through: size.height, by: 24) {
-                    for col in stride(from: 0, through: size.width, by: 24) {
-                        let r = CGRect(x: col - 1, y: row - 1, width: 2, height: 2)
-                        ctx.fill(Path(ellipseIn: r), with: .color(Color.hoyoNavy.opacity(0.05)))
+            if !isWideLayout {
+                Canvas { ctx, size in
+                    for row in stride(from: 0, through: size.height, by: 24) {
+                        for col in stride(from: 0, through: size.width, by: 24) {
+                            let r = CGRect(x: col - 1, y: row - 1, width: 2, height: 2)
+                            ctx.fill(Path(ellipseIn: r), with: .color(Color.hoyoNavy.opacity(0.05)))
+                        }
                     }
                 }
+                .ignoresSafeArea()
+                .allowsHitTesting(false)
             }
-            .ignoresSafeArea()
-            .allowsHitTesting(false)
 
             ScrollView {
                 VStack(spacing: 16) {
                     heroCard
-                        .opacity(appeared ? 1 : 0).offset(y: appeared ? 0 : 24)
-                        .animation(.spring(response: 0.5, dampingFraction: 0.72), value: appeared)
-
                     bilibiliCard
-                        .opacity(appeared ? 1 : 0).offset(y: appeared ? 0 : 24)
-                        .animation(.spring(response: 0.5, dampingFraction: 0.72).delay(0.09), value: appeared)
-
                     detailCard
-                        .opacity(appeared ? 1 : 0).offset(y: appeared ? 0 : 24)
-                        .animation(.spring(response: 0.5, dampingFraction: 0.72).delay(0.16), value: appeared)
-
                 }
                 .padding(16)
-                .padding(.bottom, 110)
+                .padding(.bottom, 92)
             }
-
-            // Bottom action button
-            VStack(spacing: 0) {
-                Button { toggleDone() } label: {
-                    HStack(spacing: 8) {
-                        Text(event.isDone ? "↩" : "✓")
-                            .font(.system(size: 17, weight: .black))
-                        Text(event.isDone ? "标记为未完成" : "标记为已完成")
-                            .font(.system(size: 16, weight: .black, design: .rounded))
-                        if !event.isDone {
-                            Image(systemName: "star.fill")
-                                .font(.system(size: 11))
-                                .foregroundStyle(Color.hoyoYellow)
-                        }
-                    }
-                    .foregroundStyle(.white)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 18)
-                    .background(
-                        LinearGradient(
-                            colors: event.isDone
-                                ? [Color.hoyoMint, Color(hex: "2aa99f")]
-                                : [Color.hoyoPink, Color(hex: "FF4DA6")],
-                            startPoint: .leading, endPoint: .trailing
-                        ),
-                        in: RoundedRectangle(cornerRadius: 18)
-                    )
-                    .shadow(
-                        color: (event.isDone ? Color.hoyoMint : Color.hoyoPink).opacity(0.40),
-                        radius: 12, x: 0, y: 4
-                    )
-                }
-                .buttonStyle(CardPressStyle())
-                .padding(.horizontal, 16)
-                .padding(.bottom, 24)
-            }
-            .ignoresSafeArea(edges: .bottom)
         }
+        .overlay(alignment: .bottom) { bottomActionButton }
         .navigationBarBackButtonHidden(true)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar { toolbarContent }
         .fontDesign(.rounded)
-        .task {
-            try? await Task.sleep(for: .milliseconds(160))
-            withAnimation(.spring(response: 0.5, dampingFraction: 0.72)) { appeared = true }
+    }
+
+    private var bottomActionButton: some View {
+        Button { toggleDone() } label: {
+            HStack(spacing: 8) {
+                Text(event.isDone ? "↩" : "✓")
+                    .font(.system(size: 17, weight: .black))
+                Text(event.isDone ? "标记为未完成" : "标记为已完成")
+                    .font(.system(size: 16, weight: .black, design: .rounded))
+                if !event.isDone {
+                    Image(systemName: "star.fill")
+                        .font(.system(size: 11))
+                        .foregroundStyle(Color.hoyoYellow)
+                }
+            }
+            .foregroundStyle(.white)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 18)
+            .background(
+                LinearGradient(
+                    colors: event.isDone
+                        ? [Color.hoyoMint, Color(hex: "2aa99f")]
+                        : [Color.hoyoPink, Color(hex: "FF4DA6")],
+                    startPoint: .leading, endPoint: .trailing
+                ),
+                in: RoundedRectangle(cornerRadius: 18)
+            )
+            .shadow(color: (event.isDone ? Color.hoyoMint : Color.hoyoPink).opacity(0.40),
+                    radius: 12, x: 0, y: 4)
         }
+        .buttonStyle(CardPressStyle())
+        .padding(.horizontal, 16)
+        .padding(.top, 10)
+        .padding(.bottom, 6)
+        .background(.white.opacity(0.96))
     }
 
     // MARK: - Hero Card
 
     private var heroCard: some View {
         VStack(alignment: .leading, spacing: 0) {
-            // Top row: game tag + heart/star
+            // Top row: game tag
             HStack(alignment: .top) {
                 Text(event.game.displayName)
                     .font(.system(size: 12, weight: .semibold))
@@ -115,15 +117,6 @@ struct EventGuideView: View {
                     .background(Color.hoyoNavy.opacity(0.45), in: Capsule())
 
                 Spacer()
-
-                HStack(spacing: 10) {
-                    Text("♥")
-                        .font(.system(size: 18))
-                        .foregroundStyle(.white.opacity(0.60))
-                    Text("★")
-                        .font(.system(size: 18))
-                        .foregroundStyle(.white.opacity(0.60))
-                }
             }
             .padding(.bottom, 14)
 
@@ -176,7 +169,7 @@ struct EventGuideView: View {
     // MARK: - Bilibili Card
 
     private var bilibiliCard: some View {
-        Button { openURL(bilibiliSearchURL) } label: {
+        Button { openBilibiliSearch() } label: {
             HStack(spacing: 14) {
                 RoundedRectangle(cornerRadius: 12)
                     .fill(Color(hex: "00A1D6"))
@@ -264,12 +257,15 @@ struct EventGuideView: View {
     @ToolbarContentBuilder
     private var toolbarContent: some ToolbarContent {
         ToolbarItem(placement: .topBarLeading) {
-            Button { dismiss() } label: {
-                Image(systemName: "chevron.left")
-                    .font(.system(size: 14, weight: .bold))
-                    .foregroundStyle(.white)
-                    .frame(width: 36, height: 36)
-                    .background(Color.hoyoNavy, in: RoundedRectangle(cornerRadius: 10))
+            // With the vertical bar, 返回 lives there instead.
+            if !hasVerticalBar {
+                Button { dismiss() } label: {
+                    Image(systemName: "chevron.left")
+                        .font(.system(size: 14, weight: .bold))
+                        .foregroundStyle(.white)
+                        .frame(width: 36, height: 36)
+                        .background(Color.hoyoNavy, in: RoundedRectangle(cornerRadius: 10))
+                }
             }
         }
         ToolbarItem(placement: .principal) {
